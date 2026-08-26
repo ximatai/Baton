@@ -1,0 +1,8 @@
+# Optional dependency set for the AG-UI adapter and its contract test.
+# The core local Companion fixture remains standard-library only.
+ag-ui-protocol==0.1.20
+annotated-types==0.8.0
+pydantic==2.13.4
+pydantic-core==2.46.4
+typing-extensions==4.16.0
+typing-inspection==0.4.4

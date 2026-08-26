@@ -1,0 +1,4 @@
+# Local Xcode user state and generated Python bytecode.
+Baton.xcodeproj/xcuserdata/
+__pycache__/
+*.py[cod]
