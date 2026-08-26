@@ -1,23 +1,8 @@
-//
-//  BatonTests.swift
-//  BatonTests
-//
-//  Created by 牧云踏歌 on 2026/8/26.
-//
-
 import Foundation
 import Testing
 @testable import Baton
 
-struct BatonTests {
-    @Test func pairingQRParserAcceptsOnlyAbsoluteURLs() {
-        #expect(BatonPairingURLParser.parse("https://service.example/.well-known/baton/pair/abc")?.host == "service.example")
-        #expect(BatonPairingURLParser.parse("  http://127.0.0.1:8787/.well-known/baton/pair/abc  ")?.host == "127.0.0.1")
-        #expect(BatonPairingURLParser.parse("not a URL") == nil)
-        #expect(BatonPairingURLParser.parse("baton://pair/abc") == nil)
-        #expect(BatonPairingURLParser.parse("/relative/pairing") == nil)
-    }
-
+struct ConversationReducerTests {
     private func message(id: String = "msg_1", text: String = "hello") -> ConversationMessage {
         ConversationMessage(id: id, clientMessageID: nil, conversationID: "conv_1", role: .assistant, content: [MessageContent(type: "text", text: text)], createdAt: "2026-08-26T00:00:00Z", status: "streaming")
     }
@@ -51,7 +36,7 @@ struct BatonTests {
         let snapshot = ConversationSnapshot(id: "conv_1", title: "Test", agentName: nil, messages: [message()], eventCursor: EventCursor(id: "evt_10", sequence: 10))
         var reducer = ConversationEventReducer()
         reducer.replaceSnapshot(snapshot)
-        let required = reducer.apply(BatonEvent(id: "evt_99", sequence: 99, type: "conversation.resync", data: .object(["reason": .string("cursor_unknown_or_expired")])) )
+        let required = reducer.apply(BatonEvent(id: "evt_99", sequence: 99, type: "conversation.resync", data: .object(["reason": .string("cursor_unknown_or_expired")])))
         #expect(required)
         #expect(reducer.messages == [message()])
         #expect(reducer.cursor == EventCursor(id: "evt_10", sequence: 10))
@@ -64,45 +49,5 @@ struct BatonTests {
         let restored = try JSONDecoder().decode(PendingOutboxMessage.self, from: JSONEncoder().encode(pending))
         #expect(restored.clientMessageID == uuid.uuidString)
         #expect(restored.belongs(to: credential))
-    }
-
-    @Test func unauthorizedResponseIsTerminalForSavedCredential() {
-        let invalid = CompanionAPIError.server(status: 401, code: "invalid_token", message: "expired")
-        #expect(invalid.invalidatesSessionCredential)
-        #expect(!CompanionAPIError.server(status: 503, code: "temporary", message: "retry").invalidatesSessionCredential)
-    }
-
-    @Test func markdownRendererParsesCoreChatFormatting() {
-        let source = """
-        # 标题
-
-        **粗体**、*斜体*、`code`，以及 [Baton](https://example.test)。
-
-        - 第一项
-        - 第二项
-
-        ```swift
-        let baton = \"ready\"
-        ```
-        """
-
-        let rendered = BatonMarkdownRenderer.render(source)
-        #expect(rendered != nil)
-        #expect(rendered.map { String($0.characters).contains("标题") } == true)
-        #expect(rendered.map { String($0.characters).contains("let baton") } == true)
-        #expect(rendered?.runs.contains(where: { $0.link == URL(string: "https://example.test") }) == true)
-    }
-
-    @Test func markdownRendererKeepsHTMLLookingInputAsText() {
-        let source = "<script>alert('not executable')</script>"
-        let rendered = BatonMarkdownRenderer.render(source)
-        #expect(rendered.map { String($0.characters) } == source)
-    }
-
-    @Test func markdownRendererDoesNotMixHTMLWithMarkdown() {
-        let source = "**Baton** <em>不解释</em>"
-        let rendered = BatonMarkdownRenderer.render(source)
-        #expect(rendered.map { String($0.characters) } == source)
-        #expect(rendered?.runs.contains(where: { $0.inlinePresentationIntent != nil }) == false)
     }
 }
