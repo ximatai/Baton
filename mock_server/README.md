@@ -1,5 +1,7 @@
 # Local Baton Mock Server
 
+> **受众：Baton 仓库维护者与本地联调者。** 这是开发 fixture 的使用说明，不是部署手册，也不是 Baton Companion Profile 的生产实现规范。产品定位见根目录 `README.md`；生产接入请读 `../BATON_SPEC.md` 与 `../JAVA_INTEGRATION.md`。
+
 Dependency-free development fixture for the V1 Companion Profile. It stores
 one conversation in memory and generates deterministic streaming replies by
 default. An explicit command-line option can use any OpenAI-compatible chat

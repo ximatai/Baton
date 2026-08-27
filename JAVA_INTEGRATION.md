@@ -1,6 +1,8 @@
 # Java Web 接入指南（Baton Companion Profile 1.0）
 
-本文面向已有 Java Web/Agent 服务的维护者。Baton 的本地 Python 服务是协议测试靶场，不是生产后端；Java 服务继续拥有现有登录态、Conversation、Agent 运行时和业务权限。本文只描述当前 [BATON_SPEC.md](BATON_SPEC.md) 已定义的 V1 行为，不要求引入某个 Java 框架、SDK 或 Agent 框架。
+> **受众：已有 Java Web/Agent 服务的接入维护者。** 这是一份实现指南；完整 wire contract 以 [BATON_SPEC.md](BATON_SPEC.md) 为准，产品介绍见 [README.md](README.md)。
+
+Baton 的本地 Python 服务是协议测试靶场，不是生产后端；Java 服务继续拥有现有登录态、Conversation、Agent 运行时和业务权限。本文只描述当前 [BATON_SPEC.md](BATON_SPEC.md) 已定义的 V1 行为，不要求引入某个 Java 框架、SDK 或 Agent 框架。
 
 ## 边界与职责
 

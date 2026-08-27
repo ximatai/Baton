@@ -1,4 +1,7 @@
-# Baton 开发约定
+# Baton 维护者约定
+
+> **受众：仓库维护者与编码 agent。** 这是内部工程约定，不是产品介绍或第三方接入文档。
+> 产品定位见 `README.md`；对外协议见 `BATON_SPEC.md`；Java 服务接入见 `JAVA_INTEGRATION.md`。
 
 ## 边界
 

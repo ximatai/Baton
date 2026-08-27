@@ -1,4 +1,7 @@
-# Baton V1 Architecture
+# Baton Companion Profile 1.0
+
+> **受众：计划让 Web/Agent 服务接入 Baton 的服务端、Web 与移动端实现者。**
+> 本文是 V1 的对外协议契约；产品介绍见 `README.md`，仓库内部编码约定见 `AGENTS.md`。
 
 ## Product definition
 
@@ -379,44 +382,7 @@ such as `camera`, `file`, `approval`, `location`, and `notification` are
 explicitly deferred. A future version must define their lifecycle and fallback
 semantics rather than treating unknown keys as negotiated support.
 
-## iOS application boundaries
-
-Use SwiftUI with a V1 coordinator and Swift Concurrency. Do not let views make
-network requests, access Keychain, or access Speech directly.
-
-```text
-Baton
-├── App                 root routing and the V1 session coordinator
-├── Features            Pairing, Conversation, Speech
-└── Core
-    ├── Protocol        discovery/pairing API, auth, SSE codec, DTO mapping
-    ├── Conversation    timeline reducer and event cursor handling
-    ├── Persistence     Keychain credentials and durable message outbox
-    └── Presentation    safe Markdown rendering
-```
-
-Persist access credentials, pairing proof, and the durable message outbox only
-in Keychain. The server remains authoritative: each restored session begins
-with a fresh snapshot and then resumes SSE from its atomic event cursor.
-
-For iOS 26.5, `SpeechAnalyzer`/`SpeechTranscriber` is the primary implementation
-and must be availability-checked.  Audio remains on device; only the edited
-text is sent to the server.  The UX is: tap/hold microphone → live transcript →
-edit → send.  The app must present microphone and speech-recognition permission
-states clearly and remain fully usable with typed input when unavailable.
-
-## Delivery order
-
-1. Define Swift domain types and protocol DTOs with fixture-driven unit tests.
-2. Implement a local mock Companion server for pairing, history, SSE, streaming,
-   reconnection, and cancellation.
-3. Build QR scan + approval + secure token persistence.
-4. Build timeline, composer, and SSE resume/resync behavior.
-5. Add on-device transcription and its permission/error states.
-6. Replace the mock with a reference web-server adapter and publish the
-   Companion Profile for integrators.
-
-## Non-negotiable acceptance checks
+## Integration acceptance requirements
 
 - A newly scanned QR joins exactly the conversation selected by the web page.
 - Both clients receive each other’s messages without a direct client-to-client
