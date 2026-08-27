@@ -4,3 +4,9 @@ __pycache__/
 *.py[cod]
 .venv/
 .DS_Store
+
+# Local credentials and environment overrides. Commit an explicitly reviewed
+# example file instead if a future integration needs one.
+.env
+.env.*
+!.env.example

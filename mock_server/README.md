@@ -48,7 +48,7 @@ all interfaces but advertise the Mac's private IP (never `0.0.0.0`):
 
 ```sh
 python3 mock_server/mock_server.py --host 0.0.0.0 \
-  --public-base-url http://172.20.10.3:8787
+  --public-base-url http://<mac-private-ip>:8787
 ```
 
 The iOS Debug client accepts only loopback or RFC1918 private IPv4 HTTP hosts;
@@ -67,7 +67,7 @@ SSE contract, start the fixture with an OpenAI-compatible completion endpoint:
 
 ```sh
 python3 mock_server/mock_server.py --host 0.0.0.0 \
-  --public-base-url http://172.20.10.3:8787 \
+  --public-base-url http://<mac-private-ip>:8787 \
   --openai-chat-completions-url https://llm.example.com/v1/chat/completions \
   --openai-model your-model-id \
   --openai-reasoning-effort none

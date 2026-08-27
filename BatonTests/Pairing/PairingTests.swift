@@ -21,7 +21,7 @@ struct PairingTests {
     }
 
     @Test func debugHTTPPolicyAcceptsOnlyPrivateIPv4OrLoopback() {
-        #expect(BatonDebugHTTPHostPolicy.allows("172.20.10.3"))
+        #expect(BatonDebugHTTPHostPolicy.allows("172.20.1.2"))
         #expect(BatonDebugHTTPHostPolicy.allows("10.0.0.8"))
         #expect(BatonDebugHTTPHostPolicy.allows("192.168.1.2"))
         #expect(!BatonDebugHTTPHostPolicy.allows("172.32.0.1"))

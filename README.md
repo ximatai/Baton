@@ -84,3 +84,7 @@ python3 mock_server/mock_server.py
 - 会话凭据与待发送消息仅保存在 iOS Keychain。
 - 语音音频仅在 iPhone 本地识别；只有用户编辑后的文本会发送给服务端。
 - 模型 API Key、Cookie、token 和 `device_proof` 不进入 App、二维码、代码或日志。
+
+## 开源许可
+
+Baton 采用 [MIT License](LICENSE) 开源。
