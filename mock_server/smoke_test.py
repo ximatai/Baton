@@ -2,12 +2,14 @@
 """Repeatable pairing and conversation smoke test; starts no server itself."""
 import json
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8787"
+CONVERSATION_ID = None
 
 
 def request(path, method="GET", payload=None, token=None, expect_json=True, extra_headers=None):
@@ -35,7 +37,7 @@ def read_sse_until(token, last_event_id, predicate, maximum=20):
     headers = {"Authorization": "Bearer " + token, "Accept": "text/event-stream"}
     if last_event_id:
         headers["Last-Event-ID"] = last_event_id
-    req = urllib.request.Request(BASE + "/v1/baton/conversations/conv_local/events", headers=headers)
+    req = urllib.request.Request(BASE + f"/v1/baton/conversations/{CONVERSATION_ID}/events", headers=headers)
     response = urllib.request.urlopen(req, timeout=3)
     events, fields = [], {}
     try:
@@ -66,8 +68,9 @@ def read_sse_until(token, last_event_id, predicate, maximum=20):
 pair = create_pairing()
 pairing_id = pair["pairing_id"]
 status, discovery = request("/.well-known/baton/pair/" + pairing_id)
-assert status == 200 and discovery["conversation"]["id"] == "conv_local" and "join" in discovery["endpoints"]
-status, denied = request("/v1/baton/conversations/conv_local")
+assert status == 200 and discovery["conversation"]["id"].startswith("conv_") and "join" in discovery["endpoints"]
+CONVERSATION_ID = discovery["conversation"]["id"]
+status, denied = request(f"/v1/baton/conversations/{CONVERSATION_ID}")
 assert status == 401 and denied["error"]["code"] == "invalid_token"
 
 # The iPhone joins, then waits for the existing web client to decide.
@@ -95,22 +98,31 @@ status, replayed_claim = request("/v1/baton/pairings/" + pairing_id + "/requests
 assert status == 200 and replayed_claim["access_token"] == token and replayed_claim["pairing_status"] == "consumed"
 
 # The granted token can now use the normal conversation API and retains send idempotency.
-status, snapshot = request("/v1/baton/conversations/conv_local", token=token)
+status, snapshot = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=token)
 assert status == 200 and snapshot["messages"] and snapshot["event_cursor"]["id"]
 client_id = str(uuid.uuid4())
 payload = {"client_message_id": client_id, "content": [{"type": "text", "text": "hello"}]}
-status, first = request("/v1/baton/conversations/conv_local/messages", "POST", payload, token)
-status2, second = request("/v1/baton/conversations/conv_local/messages", "POST", payload, token)
+status, first = request(f"/v1/baton/conversations/{CONVERSATION_ID}/messages", "POST", payload, token)
+status2, second = request(f"/v1/baton/conversations/{CONVERSATION_ID}/messages", "POST", payload, token)
 assert status == 201 and status2 == 200 and first["id"] == second["id"]
+
+# The assistant placeholder and the streamed prefix are source-of-truth state,
+# not merely transient SSE. A reconnecting client can render them from a
+# snapshot while the run remains active.
+time.sleep(.08)
+status, streaming_snapshot = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=token)
+assert status == 200 and streaming_snapshot["active_runs"]
+streaming_assistant = next(message for message in streaming_snapshot["messages"] if message["role"] == "assistant" and message["status"] == "streaming")
+assert streaming_assistant["content"][0]["text"]
 
 # A snapshot is atomically paired with its event cursor: only envelopes newer
 # than that cursor replay, and every envelope uses standard SSE id/event/data.
 time.sleep(.5)  # Let the small deterministic reply above finish before the next assertion.
-status, resume_snapshot = request("/v1/baton/conversations/conv_local", token=token)
+status, resume_snapshot = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=token)
 assert status == 200
 cursor = resume_snapshot["event_cursor"]
 resume_payload = {"client_message_id": str(uuid.uuid4()), "content": [{"type": "text", "text": "resume cursor"}]}
-status, _ = request("/v1/baton/conversations/conv_local/messages", "POST", resume_payload, token)
+status, _ = request(f"/v1/baton/conversations/{CONVERSATION_ID}/messages", "POST", resume_payload, token)
 assert status == 201
 replayed = read_sse_until(token, cursor["id"], lambda events: any(event["type"] == "run.started" for event in events))
 assert all(event["sequence"] > cursor["sequence"] for event in replayed)
@@ -120,8 +132,8 @@ run_id = next(event["data"]["run_id"] for event in replayed if event["type"] == 
 # Cancellation is requested once and reaches one terminal, ordered outcome:
 # assistant message terminal state followed by run.cancelled. Repeating cancel
 # is harmless and never emits a duplicate terminal event.
-status, cancelling = request(f"/v1/baton/conversations/conv_local/runs/{run_id}:cancel", "POST", {}, token)
-assert status == 202 and cancelling == {"run_id": run_id, "status": "cancellation_requested"}
+status, cancelling = request(f"/v1/baton/conversations/{CONVERSATION_ID}/runs/{run_id}:cancel", "POST", {}, token)
+assert status == 202 and cancelling == {"run_id": run_id, "status": "cancelled"}
 cancelled_events = read_sse_until(
     token,
     next(event["id"] for event in replayed if event["type"] == "run.started"),
@@ -130,8 +142,48 @@ cancelled_events = read_sse_until(
 terminal_types = [event["type"] for event in cancelled_events if event["type"] in {"message.completed", "run.cancelled"}]
 assert terminal_types == ["message.completed", "run.cancelled"]
 assert next(event for event in cancelled_events if event["type"] == "message.completed")["data"]["status"] == "cancelled"
-status, repeated_cancel = request(f"/v1/baton/conversations/conv_local/runs/{run_id}:cancel", "POST", {}, token)
+status, repeated_cancel = request(f"/v1/baton/conversations/{CONVERSATION_ID}/runs/{run_id}:cancel", "POST", {}, token)
 assert status == 200 and repeated_cancel == {"run_id": run_id, "status": "cancelled"}
+
+# Provider failure terminates through the V1 sequence: the message reports a
+# safe failure first, then the same run reaches run.completed(status: failed).
+# This one-shot, authenticated hook avoids relying on a real provider outage.
+status, armed = request("/v1/baton/mock/chat:fail-next", "POST", {}, token)
+assert status == 200 and armed == {"status": "armed"}
+failure_snapshot_status, failure_snapshot = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=token)
+assert failure_snapshot_status == 200
+failure_payload = {"client_message_id": str(uuid.uuid4()), "content": [{"type": "text", "text": "fixture failure"}]}
+status, _ = request(f"/v1/baton/conversations/{CONVERSATION_ID}/messages", "POST", failure_payload, token)
+assert status == 201
+failed_events = read_sse_until(
+    token,
+    failure_snapshot["event_cursor"]["id"],
+    lambda events: any(event["type"] == "run.completed" and event["data"]["status"] == "failed" for event in events),
+)
+failure_terminals = [event for event in failed_events if event["type"] in {"message.failed", "run.completed", "run.failed"}]
+assert [event["type"] for event in failure_terminals] == ["message.failed", "run.completed"]
+assert failure_terminals[1]["data"]["status"] == "failed"
+
+# Cancellation becomes terminal at the Baton boundary, even while a provider
+# call is still blocked. The late provider result must be silent.
+status, armed = request("/v1/baton/mock/chat:slow-next", "POST", {"seconds": 1}, token)
+assert status == 200 and armed == {"status": "armed"}
+status, slow_snapshot = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=token)
+assert status == 200
+status, _ = request(f"/v1/baton/conversations/{CONVERSATION_ID}/messages", "POST", {
+    "client_message_id": str(uuid.uuid4()), "content": [{"type": "text", "text": "slow cancel"}]
+}, token)
+assert status == 201
+slow_started = read_sse_until(token, slow_snapshot["event_cursor"]["id"], lambda events: any(event["type"] == "run.started" for event in events))
+slow_run = next(event["data"]["run_id"] for event in slow_started if event["type"] == "run.started")
+status, cancelled = request(f"/v1/baton/conversations/{CONVERSATION_ID}/runs/{slow_run}:cancel", "POST", {}, token)
+assert status == 202 and cancelled == {"run_id": slow_run, "status": "cancelled"}
+slow_terminal = read_sse_until(token, next(event["id"] for event in slow_started if event["type"] == "run.started"),
+                               lambda events: any(event["type"] == "run.cancelled" for event in events))
+terminal_cursor = next(event["id"] for event in slow_terminal if event["type"] == "run.cancelled")
+time.sleep(1.1)
+status, after_slow = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=token)
+assert status == 200 and after_slow["event_cursor"]["id"] == terminal_cursor
 
 # The mock keeps a finite log. Expire an otherwise valid historical cursor via
 # its authenticated test hook; the server must send a complete Baton resync
@@ -167,7 +219,63 @@ assert status == 410 and expired["error"]["code"] == "pairing_expired"
 # Device revocation is exact: the bearer can revoke only its own opaque session.
 status, revoked = request(f"/v1/baton/devices/smoke/sessions/{session_id}", "DELETE", token=token)
 assert status == 200 and revoked == {"status": "revoked"}
-status, denied_after_revoke = request("/v1/baton/conversations/conv_local", token=token)
+status, denied_after_revoke = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=token)
 assert status == 401 and denied_after_revoke["error"]["code"] == "invalid_token"
 
-print("smoke test passed: pairing safety, idempotent messages, atomic snapshot cursor/SSE replay, terminal cancel, invalid-cursor resync, and exact session revocation")
+# Ending a conversation is shared, not a device-only disconnect: a connection
+# already subscribed on another device receives the close event; pending
+# invitations and bearer credentials become invalid; a new pairing gets a new
+# conversation ID rather than a reset event sequence under the old ID.
+end_pair = create_pairing()
+end_proof = "proof_" + uuid.uuid4().hex + uuid.uuid4().hex
+status, end_join = request("/v1/baton/pairings/" + end_pair["pairing_id"] + "/requests", "POST",
+                           {"device_id": "end", "device_proof": end_proof})
+assert status == 202
+status, _ = request("/v1/baton/pairings/" + end_pair["pairing_id"] + "/approval", "POST", {"decision": "approved"})
+assert status == 200
+status, end_credential = request("/v1/baton/pairings/" + end_pair["pairing_id"] + "/requests/" + end_join["request_id"], extra_headers={"X-Baton-Device-Proof": end_proof})
+assert status == 200
+end_token = end_credential["access_token"]
+
+observer_pair = create_pairing()
+observer_proof = "proof_" + uuid.uuid4().hex + uuid.uuid4().hex
+status, observer_join = request("/v1/baton/pairings/" + observer_pair["pairing_id"] + "/requests", "POST",
+                                {"device_id": "observer", "device_proof": observer_proof})
+assert status == 202
+status, _ = request("/v1/baton/pairings/" + observer_pair["pairing_id"] + "/approval", "POST", {"decision": "approved"})
+assert status == 200
+status, observer_credential = request("/v1/baton/pairings/" + observer_pair["pairing_id"] + "/requests/" + observer_join["request_id"], extra_headers={"X-Baton-Device-Proof": observer_proof})
+assert status == 200
+observer_token = observer_credential["access_token"]
+status, observer_snapshot = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=observer_token)
+assert status == 200
+observer_result = []
+def observe_end():
+    try:
+        observer_result.append(read_sse_until(observer_token, observer_snapshot["event_cursor"]["id"],
+                                              lambda events: any(event["type"] == "conversation.closed" for event in events)))
+    except Exception as exc:
+        observer_result.append(exc)
+observer_thread = threading.Thread(target=observe_end, daemon=True)
+observer_thread.start()
+time.sleep(.08)
+
+pending_pair = create_pairing()
+pending_proof = "proof_" + uuid.uuid4().hex + uuid.uuid4().hex
+status, pending_join = request("/v1/baton/pairings/" + pending_pair["pairing_id"] + "/requests", "POST",
+                               {"device_id": "pending", "device_proof": pending_proof})
+assert status == 202
+status, ended = request(f"/v1/baton/conversations/{CONVERSATION_ID}:end", "POST", {}, token=end_token)
+assert status == 200 and ended == {"status": "ended"}
+observer_thread.join(2)
+assert observer_result and not isinstance(observer_result[0], Exception)
+assert any(event["type"] == "conversation.closed" for event in observer_result[0])
+status, denied_after_end = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=end_token)
+assert status == 401 and denied_after_end["error"]["code"] == "invalid_token"
+status, expired_pending = request("/v1/baton/pairings/" + pending_pair["pairing_id"] + "/requests/" + pending_join["request_id"], extra_headers={"X-Baton-Device-Proof": pending_proof})
+assert status == 410 and expired_pending["error"]["code"] == "pairing_expired"
+next_pair = create_pairing()
+status, next_discovery = request("/.well-known/baton/pair/" + next_pair["pairing_id"])
+assert status == 200 and next_discovery["conversation"]["id"] != CONVERSATION_ID
+
+print("smoke test passed: pairing safety, source-of-truth streaming snapshots, terminal cancel/failure, invalid-cursor resync, exact session revocation, and shared conversation end")

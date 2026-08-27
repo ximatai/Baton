@@ -23,6 +23,9 @@ struct ConversationEventReducer: Equatable {
         if event.type == "conversation.resync" { return true }
         if seenEventIDs.contains(event.id) { return false }
         if let sequence = event.sequence, let cursor, sequence <= cursor.sequence { return false }
+        // A missing sequence cannot be filled locally: applying this event
+        // would silently present a timeline that never existed on the server.
+        if let sequence = event.sequence, let cursor, sequence > cursor.sequence + 1 { return true }
 
         remember(event.id)
         if let sequence = event.sequence { cursor = EventCursor(id: event.id, sequence: sequence) }

@@ -33,7 +33,7 @@
 		83435A3A303ECDC50037440E /* Exceptions for "Baton" folder in "Baton" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
-				Info-Debug.plist,
+				"Info-Debug.plist",
 				Info.plist,
 			);
 			target = 83435A16303ECDC30037440E /* Baton */;
@@ -294,7 +294,7 @@
 				DEVELOPMENT_TEAM = M84W4U7RV7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_FILE = Baton/Info-Debug.plist;
+				INFOPLIST_FILE = "Baton/Info-Debug.plist";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

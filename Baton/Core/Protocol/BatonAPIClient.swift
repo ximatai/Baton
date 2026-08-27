@@ -10,7 +10,7 @@ enum CompanionAPIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidPairingURL: return "Pairing URL 无效。"
-        case .insecureEndpoint: return "只允许 HTTPS；本地 DEBUG 演示仅允许 127.0.0.1。"
+        case .insecureEndpoint: return "只允许 HTTPS；本地 DEBUG 演示仅允许回环或私有局域网地址。"
         case .endpointOriginMismatch: return "服务端端点与 Pairing URL 不属于同一来源。"
         case .invalidResponse: return "服务端响应格式无效。"
         case .server(let status, let code, let message):
@@ -24,6 +24,13 @@ enum CompanionAPIError: LocalizedError {
     /// Keychain credential and return to pairing rather than retrying it.
     var invalidatesSessionCredential: Bool {
         if case let .server(status, code, _) = self { return status == 401 || code == "invalid_token" }
+        return false
+    }
+
+    /// A closed conversation is a shared terminal state, distinct from a
+    /// device-only token revocation. The client must return to pairing.
+    var closesConversation: Bool {
+        if case let .server(_, code, _) = self { return code == "conversation_closed" }
         return false
     }
 }
@@ -95,34 +102,50 @@ struct BatonAPIClient {
         _ = try await request(url: endpoint.appending(path: "runs/\(runID):cancel"), method: "POST", token: token, body: EmptyBody()) as Response
     }
 
+    func endConversation(endpoint: URL, token: String, idempotencyKey: UUID) async throws {
+        struct Response: Decodable {}
+        guard let endURL = URL(string: endpoint.absoluteString + ":end") else { throw CompanionAPIError.invalidResponse }
+        try validateURL(endURL)
+        var request = URLRequest(url: endURL)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(idempotencyKey.uuidString.lowercased(), forHTTPHeaderField: "Idempotency-Key")
+        request.httpBody = try encoder.encode(EmptyBody())
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw CompanionAPIError.invalidResponse }
+        guard (200...299).contains(http.statusCode) else { throw decodeServerError(status: http.statusCode, data: data) }
+        _ = try decoder.decode(Response.self, from: data)
+    }
+
     func events(endpoint: URL, token: String, lastEventID: String?) -> AsyncThrowingStream<BatonEvent, Error> {
         AsyncThrowingStream { continuation in
-            let task = Task {
-                do {
-                    var request = URLRequest(url: endpoint.appending(path: "events"))
-                    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
-                    if let lastEventID { request.setValue(lastEventID, forHTTPHeaderField: "Last-Event-ID") }
-                    let (bytes, response) = try await session.bytes(for: request)
-                    guard let http = response as? HTTPURLResponse else { throw CompanionAPIError.invalidResponse }
-                    guard (200...299).contains(http.statusCode) else { throw try await serverError(response: http, bytes: bytes) }
-                    var dataLines: [String] = []
-                    for try await line in bytes.lines {
-                        if Task.isCancelled { break }
-                        if line.isEmpty {
-                            defer { dataLines.removeAll() }
-                            guard !dataLines.isEmpty else { continue }
-                            let decoded = try decoder.decode(BatonEvent.self, from: Data(dataLines.joined(separator: "\n").utf8))
-                            continuation.yield(decoded)
-                            continue
-                        }
-                        if line.hasPrefix("data:") { dataLines.append(String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)) }
-                    }
-                    continuation.finish()
-                } catch is CancellationError { continuation.finish() }
-                catch { continuation.finish(throwing: error) }
+            let eventsURL = endpoint.appending(path: "events")
+            do {
+                // Streaming is a network trust boundary too; callers must not
+                // bypass the validation performed by snapshot/send requests.
+                try validateURL(eventsURL)
+            } catch {
+                continuation.finish(throwing: error)
+                return
             }
-            continuation.onTermination = { _ in task.cancel() }
+            var request = URLRequest(url: eventsURL)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+            if let lastEventID { request.setValue(lastEventID, forHTTPHeaderField: "Last-Event-ID") }
+
+            // AsyncBytes.lines did not deliver flushed SSE frames on the
+            // physical-device HTTP fixture. A delegate receives each incoming
+            // data callback, so framing remains under Baton’s control.
+            let delegate = SSEStreamDelegate(continuation: continuation, decoder: decoder)
+            let streamSession = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+            let task = streamSession.dataTask(with: request)
+            continuation.onTermination = { _ in
+                task.cancel()
+                streamSession.invalidateAndCancel()
+            }
+            task.resume()
         }
     }
 
@@ -163,7 +186,7 @@ struct BatonAPIClient {
     private func validateURL(_ url: URL) throws {
         if url.scheme?.lowercased() == "https" { return }
         #if DEBUG
-        if url.scheme?.lowercased() == "http", ["127.0.0.1", "localhost"].contains(url.host?.lowercased() ?? "") { return }
+        if url.scheme?.lowercased() == "http", BatonDebugHTTPHostPolicy.allows(url.host) { return }
         #endif
         throw CompanionAPIError.insecureEndpoint(url)
     }
@@ -187,6 +210,186 @@ struct BatonAPIClient {
         var data = Data()
         for try await byte in bytes.prefix(32_768) { data.append(byte) }
         return decodeServerError(status: response.statusCode, data: data)
+    }
+}
+
+private func batonDebugSSE(_ message: String) {
+    #if DEBUG
+    // Keeps physical-device diagnosis observable without exposing message text,
+    // event data, endpoints, or authorization material.
+    print("[Baton SSE] \(message)")
+    #endif
+}
+
+private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate {
+    private let continuation: AsyncThrowingStream<BatonEvent, Error>.Continuation
+    private let decoder: JSONDecoder
+    private var response: HTTPURLResponse?
+    private var lineBuffer = Data()
+    private var errorBody = Data()
+    private var dataLines: [String] = []
+    private var frameID: String?
+    private var frameType: String?
+
+    init(continuation: AsyncThrowingStream<BatonEvent, Error>.Continuation, decoder: JSONDecoder) {
+        self.continuation = continuation
+        self.decoder = decoder
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let response = response as? HTTPURLResponse else {
+            continuation.finish(throwing: CompanionAPIError.invalidResponse)
+            completionHandler(.cancel)
+            return
+        }
+        self.response = response
+        if (200...299).contains(response.statusCode) {
+            guard SSEContentType.isEventStream(response.value(forHTTPHeaderField: "Content-Type")) else {
+                continuation.finish(throwing: CompanionAPIError.invalidResponse)
+                completionHandler(.cancel)
+                return
+            }
+            batonDebugSSE("opened")
+        }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        guard let response else { return }
+        guard (200...299).contains(response.statusCode) else {
+            let remaining = max(0, 32_768 - errorBody.count)
+            if remaining > 0 { errorBody.append(data.prefix(remaining)) }
+            return
+        }
+        lineBuffer.append(data)
+        while let newline = lineBuffer.firstIndex(of: 0x0A) {
+            let rawLine = lineBuffer.prefix(upTo: newline)
+            lineBuffer.removeSubrange(...newline)
+            guard var line = String(data: rawLine, encoding: .utf8) else {
+                continuation.finish(throwing: CompanionAPIError.invalidResponse)
+                dataTask.cancel()
+                return
+            }
+            if line.last == "\r" { line.removeLast() }
+            if line.isEmpty {
+                emitEventIfPresent()
+            } else if line.hasPrefix(":") {
+                // Standard SSE comments/heartbeats never carry Baton state.
+                continue
+            } else if let separator = line.firstIndex(of: ":") {
+                let field = String(line[..<separator])
+                var value = String(line[line.index(after: separator)...])
+                if value.first == " " { value.removeFirst() }
+                switch field {
+                case "id": frameID = value
+                case "event": frameType = value
+                case "data": dataLines.append(value)
+                case "retry": break
+                default: batonDebugSSE("unknown_frame_field")
+                }
+            }
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        defer { session.finishTasksAndInvalidate() }
+        if let error {
+            batonDebugSSE("failed error=\(type(of: error))")
+            continuation.finish(throwing: error)
+            return
+        }
+        guard let response else {
+            continuation.finish(throwing: CompanionAPIError.invalidResponse)
+            return
+        }
+        guard (200...299).contains(response.statusCode) else {
+            continuation.finish(throwing: decodeServerError(status: response.statusCode, data: errorBody))
+            return
+        }
+        batonDebugSSE("ended")
+        continuation.finish()
+    }
+
+    private func emitEventIfPresent() {
+        defer {
+            dataLines.removeAll()
+            frameID = nil
+            frameType = nil
+        }
+        guard !dataLines.isEmpty else { return }
+        do {
+            let event = try SSEEnvelopeDecoder.decode(
+                frameID: frameID,
+                frameType: frameType,
+                data: Data(dataLines.joined(separator: "\n").utf8),
+                decoder: decoder
+            )
+            if !BatonEventType.isKnown(event.type) { batonDebugSSE("unknown_event") }
+            batonDebugSSE("received type=\(event.type) sequence=\(event.sequence.map(String.init) ?? "none")")
+            continuation.yield(event)
+        } catch {
+            batonDebugSSE("failed error=\(type(of: error))")
+            continuation.finish(throwing: error)
+        }
+    }
+
+    private func decodeServerError(status: Int, data: Data) -> CompanionAPIError {
+        struct ServerError: Decodable { let error: Detail; struct Detail: Decodable { let code: String?; let message: String } }
+        if let decoded = try? decoder.decode(ServerError.self, from: data) {
+            return .server(status: status, code: decoded.error.code, message: decoded.error.message)
+        }
+        return .server(status: status, code: nil, message: "服务端请求失败。")
+    }
+}
+
+enum SSEContentType {
+    static func isEventStream(_ value: String?) -> Bool {
+        value?.split(separator: ";", maxSplits: 1).first?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "text/event-stream"
+    }
+}
+
+enum SSEEnvelopeDecoder {
+    /// Baton puts the canonical identity both in standard SSE framing and in
+    /// its JSON envelope. Reject disagreement rather than letting a proxy or
+    /// malformed server silently rewrite resumable stream state.
+    static func decode(frameID: String?, frameType: String?, data: Data, decoder: JSONDecoder = JSONDecoder()) throws -> BatonEvent {
+        guard let frameID, !frameID.isEmpty, let frameType, !frameType.isEmpty else {
+            throw CompanionAPIError.invalidResponse
+        }
+        let event = try decoder.decode(BatonEvent.self, from: data)
+        guard event.id == frameID, event.type == frameType else {
+            throw CompanionAPIError.invalidResponse
+        }
+        return event
+    }
+}
+
+private enum BatonEventType {
+    static func isKnown(_ type: String) -> Bool {
+        switch type {
+        case "conversation.snapshot", "conversation.resync", "conversation.closed",
+             "message.created", "message.delta", "message.completed", "message.failed",
+             "run.started", "run.completed", "run.cancelled":
+            true
+        default:
+            false
+        }
+    }
+}
+
+/// Debug builds may connect to a fixture on the same trusted LAN (for example,
+/// a Mac on an iPhone hotspot). Public HTTP remains rejected even in Debug.
+enum BatonDebugHTTPHostPolicy {
+    static func allows(_ host: String?) -> Bool {
+        guard let host = host?.lowercased() else { return false }
+        if host == "localhost" || host == "127.0.0.1" { return true }
+        let octets = host.split(separator: ".").compactMap { UInt8($0) }
+        guard octets.count == 4 else { return false }
+        switch (octets[0], octets[1]) {
+        case (10, _), (192, 168): return true
+        case (172, 16...31): return true
+        default: return false
+        }
     }
 }
 

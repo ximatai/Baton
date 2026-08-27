@@ -24,17 +24,58 @@ struct EventCursor: Codable, Equatable {
     let sequence: Int
 }
 
+struct ActiveRun: Codable, Equatable {
+    let id: String
+    let status: String
+    let messageID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id = "run_id"
+        case status
+        case messageID = "message_id"
+    }
+
+    var isLive: Bool { status == "active" || status == "cancellation_requested" }
+
+    static func current(in runs: [ActiveRun]) -> ActiveRun? {
+        runs.first(where: \.isLive)
+    }
+}
+
 struct ConversationSnapshot: Codable {
     let id: String
     let title: String
     let agentName: String?
     let messages: [ConversationMessage]
     let eventCursor: EventCursor
+    /// Optional on the wire during the V1 transition. A snapshot must expose
+    /// live runs once the server supports Stop-after-reconnect.
+    let activeRuns: [ActiveRun]
 
     enum CodingKeys: String, CodingKey {
         case id, title, messages
         case agentName = "agent_name"
         case eventCursor = "event_cursor"
+        case activeRuns = "active_runs"
+    }
+
+    init(id: String, title: String, agentName: String?, messages: [ConversationMessage], eventCursor: EventCursor, activeRuns: [ActiveRun] = []) {
+        self.id = id
+        self.title = title
+        self.agentName = agentName
+        self.messages = messages
+        self.eventCursor = eventCursor
+        self.activeRuns = activeRuns
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        title = try container.decode(String.self, forKey: .title)
+        agentName = try container.decodeIfPresent(String.self, forKey: .agentName)
+        messages = try container.decode([ConversationMessage].self, forKey: .messages)
+        eventCursor = try container.decode(EventCursor.self, forKey: .eventCursor)
+        activeRuns = try container.decodeIfPresent([ActiveRun].self, forKey: .activeRuns) ?? []
     }
 }
 struct PairingJoinRequest: Encodable {

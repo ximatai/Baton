@@ -1,21 +1,32 @@
 #!/usr/bin/env python3
-"""Tiny in-memory Baton Companion Profile fixture; never reads LM_STUDIO_KEY."""
+"""Tiny in-memory Baton Companion Profile fixture with an optional LLM backend."""
 from __future__ import annotations
 
 import argparse
+import copy
 import html
 import json
 import secrets
 import threading
 import time
 import uuid
+from io import BytesIO
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+from urllib import error as urlerror
+from urllib import request as urlrequest
 
 
 def now():
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def fixture_log(event, **fields):
+    """Emit useful local diagnostics without writing conversation secrets."""
+    details = " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
+    suffix = f" {details}" if details else ""
+    print(f"[Baton mock] {now()} {event}{suffix}", flush=True)
 
 
 class Store:
@@ -24,12 +35,37 @@ class Store:
         self.condition = threading.Condition(self.lock)
         self.pairings, self.tokens, self.events = {}, {}, []
         self.runs, self.messages, self.next_sequence = {}, [], 1
+        self.conversation_closed = False
+        self.conversation_epoch = 0
+        self.fail_next_completion_for_test = False
+        self.slow_next_completion_seconds = 0
         self.event_retention = max(1, event_retention)
-        self.conversation_id = "conv_local"
+        self.conversation_id = None
+        self.reset_conversation()
+
+    def reset_conversation(self):
+        self.conversation_epoch += 1
+        # A new handoff is a new server-owned conversation, rather than a
+        # recycled fixture ID with an unrelated event sequence.
+        self.conversation_id = "conv_" + uuid.uuid4().hex
+        self.messages, self.runs, self.events, self.next_sequence = [], {}, [], 1
+        self.conversation_closed = False
         welcome = self.add_message("msg_welcome", None, "assistant", "这是本地 Baton Mock Server，可以直接开始对话。")
-        # A conversation always has a cursor, including before the first user
-        # message.  A fetched snapshot and this cursor are therefore atomic.
         self.event("conversation.snapshot", {"conversation_id": self.conversation_id, "messages": [welcome]})
+
+    def close_conversation(self):
+        if self.conversation_closed: return False
+        self.conversation_closed = True
+        self.conversation_epoch += 1
+        # Invitations and credentials are capabilities for this exact
+        # conversation. End is a single shared boundary, not local UI state.
+        for pairing in self.pairings.values():
+            pairing["status"] = "expired"
+            if pairing.get("request"):
+                pairing["request"]["access_token"] = None
+        self.tokens.clear()
+        self.event("conversation.closed", {"conversation_id": self.conversation_id})
+        return True
 
     def add_message(self, message_id, client_id, role, text, status="completed"):
         message = {"id": message_id, "client_message_id": client_id,
@@ -41,12 +77,13 @@ class Store:
     def event(self, event_type, data):
         with self.condition:
             event = {"id": "evt_" + uuid.uuid4().hex[:16], "sequence": self.next_sequence,
-                     "type": event_type, "occurred_at": now(), "data": data}
+                     "type": event_type, "occurred_at": now(), "data": copy.deepcopy(data)}
             self.next_sequence += 1
             self.events.append(event)
             del self.events[:-self.event_retention]
             self.condition.notify_all()
-            return event
+        fixture_log("conversation.event", type=event_type, sequence=event["sequence"])
+        return event
 
     def event_cursor(self):
         """Return the latest *retained* event as a resumable snapshot cursor."""
@@ -66,15 +103,91 @@ class Store:
             pairing["status"] = "expired"
         return pairing, "pairing_expired" if pairing["status"] == "expired" else None
 
-    def new_token(self, device_id):
+    def new_token(self, device_id, conversation_id):
         token = "baton_local_" + secrets.token_urlsafe(18)
         session_id = "ses_" + secrets.token_urlsafe(18)
         self.tokens[token] = {"device_id": device_id, "session_id": session_id,
-                              "conversation_id": self.conversation_id}
+                              "conversation_id": conversation_id}
         return token, session_id
+
+    def is_current_run(self, run_id, epoch, *, status="active"):
+        run = self.runs.get(run_id)
+        return (not self.conversation_closed and self.conversation_epoch == epoch
+                and run is not None and run["epoch"] == epoch and run["status"] == status)
+
+    def cancel_run(self, run_id):
+        """Make cancellation terminal immediately; a blocked provider is irrelevant."""
+        with self.lock:
+            run = self.runs.get(run_id)
+            if not run:
+                return None, None
+            if run["status"] == "cancelled":
+                return "cancelled", False
+            if run["status"] != "active":
+                return run["status"], False
+            run["status"] = "cancelled"
+            message = next((item for item in self.messages if item["id"] == run["message_id"]), None)
+            if message:
+                message["status"] = "cancelled"
+            self.event("message.completed", {"message_id": run["message_id"], "status": "cancelled"})
+            self.event("run.cancelled", {"run_id": run_id, "status": "cancelled"})
+            return "cancelled", True
 
 
 STORE = None
+CHAT_COMPLETER = None
+SSE_LIVE_SECONDS = 300
+
+
+class ChatCompletionError(Exception):
+    """An upstream chat provider failed without exposing its response to clients."""
+
+
+class OpenAICompatibleChatCompleter:
+    """Small OpenAI-compatible, non-streaming adapter for local integration tests.
+
+    Baton still streams its own message events. Keeping the upstream request
+    non-streaming makes this fixture deliberately small and keeps cancellation
+    semantics owned by the Baton run rather than an external provider's SSE.
+    """
+
+    def __init__(self, endpoint, model, api_key, reasoning_effort=None):
+        self.endpoint, self.model, self.api_key = endpoint, model, api_key
+        self.reasoning_effort = reasoning_effort
+
+    def complete(self, messages):
+        provider_messages = [{
+            "role": "system",
+            "content": "You are Baton’s helpful Chinese-speaking assistant. Reply directly and concisely.",
+        }]
+        # This fixture deliberately sends only the latest user turn. The
+        # configured LM Studio model's prompt template rejects assistant turns;
+        # conversation history belongs to the real Companion/Java server, not
+        # this small local test adapter.
+        latest_user = next((message for message in reversed(messages) if message["role"] == "user"), None)
+        if latest_user:
+            content = "".join(part.get("text", "") for part in latest_user["content"] if part.get("type") == "text")
+            if content:
+                provider_messages.append({"role": "user", "content": content})
+        if len(provider_messages) == 1:
+            raise ChatCompletionError("no user message to complete")
+        payload = {"model": self.model, "messages": provider_messages, "temperature": 0.4}
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
+        payload = json.dumps(payload).encode()
+        request = urlrequest.Request(self.endpoint, data=payload, method="POST", headers={
+            "Authorization": "Bearer " + self.api_key,
+            "Content-Type": "application/json",
+        })
+        try:
+            with urlrequest.urlopen(request, timeout=90) as response:
+                body = json.load(response)
+            content = body["choices"][0]["message"]["content"]
+        except (urlerror.URLError, urlerror.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
+            raise ChatCompletionError("upstream chat completion failed") from exc
+        if not isinstance(content, str) or not content.strip():
+            raise ChatCompletionError("upstream chat completion was empty")
+        return content.strip()
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -90,7 +203,29 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def log_message(self, fmt, *args):
-        print("[%s] %s" % (self.log_date_time_string(), fmt % args))
+        # BaseHTTPRequestHandler includes the whole request path in its
+        # default logs. Pairing paths contain short-lived capability IDs, so
+        # report only a stable route category instead.
+        path = urlparse(self.path).path.rstrip("/")
+        if path == "": route = "console"
+        elif path == "/v1/baton/mock/web/conversation": route = "fixture.web.snapshot"
+        elif path == "/v1/baton/mock/web/events": route = "fixture.web.events"
+        elif path == "/v1/baton/mock/web/messages": route = "fixture.web.messages"
+        elif path.startswith("/.well-known/baton/pair/"): route = "pairing.discovery"
+        elif path == "/v1/baton/pairings": route = "pairing.create"
+        elif path.endswith("/requests"): route = "pairing.request"
+        elif "/pairings/" in path and "/requests/" in path: route = "pairing.claim"
+        elif "/pairings/" in path and path.endswith("/approval"): route = "pairing.approval"
+        elif "/pairings/" in path and path.endswith("/mock-status"): route = "pairing.status"
+        elif path.endswith("/events"): route = "conversation.events"
+        elif path.endswith("/messages"): route = "conversation.messages"
+        elif "/runs/" in path: route = "conversation.cancel"
+        elif "/conversations/" in path: route = "conversation.snapshot"
+        elif path.startswith("/v1/baton/devices/"): route = "device.session"
+        elif path.startswith("/v1/baton/mock/"): route = "fixture.control"
+        else: route = "other"
+        status = args[1] if len(args) > 1 else None
+        fixture_log("http.request", method=self.command, route=route, status=status)
 
     def raw_body(self):
         return self.rfile.read(int(self.headers.get("Content-Length", "0")))
@@ -114,6 +249,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def send_png(self, value):
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(value)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(value)
+
     def error(self, status, code, message):
         self.send_json({"error": {"code": code, "message": message}}, status)
 
@@ -126,16 +269,25 @@ class Handler(BaseHTTPRequestHandler):
     def auth(self):
         value = self.headers.get("Authorization", "")
         with STORE.lock:
-            return STORE.tokens.get(value[7:] if value.startswith("Bearer ") else "")
+            credential = STORE.tokens.get(value[7:] if value.startswith("Bearer ") else "")
+            if not credential or STORE.conversation_closed:
+                return None
+            return credential if credential["conversation_id"] == STORE.conversation_id else None
 
     def create_pairing(self, body):
         # Fixture-only test hook. It is explicitly not a Companion Profile field.
+        # The profile's invitation lifetime is intentionally short.  The
+        # sub-second hook is solely for deterministic expiry testing, never a
+        # way for this fixture UI to relax the protocol's security boundary.
         ttl = body.get("mock_ttl_seconds", 60)
         if not isinstance(ttl, (int, float)) or isinstance(ttl, bool) or not 0 <= ttl <= 60:
             return self.error(400, "invalid_mock_ttl", "mock_ttl_seconds must be between 0 and 60.")
+        with STORE.lock:
+            if STORE.conversation_closed: STORE.reset_conversation()
         pairing_id, expires_at = "ps_" + secrets.token_urlsafe(32), time.time() + ttl
         with STORE.lock:
-            STORE.pairings[pairing_id] = {"expires_at": expires_at, "status": "created", "request": None}
+            STORE.pairings[pairing_id] = {"expires_at": expires_at, "status": "created", "request": None,
+                                          "conversation_id": STORE.conversation_id}
         return self.send_json({"pairing_id": pairing_id,
             "qr_url": f"{STORE.base_url}/.well-known/baton/pair/{pairing_id}",
             "approval_url": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/approval",
@@ -171,7 +323,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.error(400, "invalid_decision", "decision must be approved or rejected.")
             pairing["status"] = decision
             if decision == "approved":
-                token, session_id = STORE.new_token(pairing["request"]["device_id"])
+                token, session_id = STORE.new_token(pairing["request"]["device_id"], pairing["conversation_id"])
                 pairing["request"]["access_token"] = token
                 pairing["request"]["session_id"] = session_id
         if redirect:
@@ -203,7 +355,7 @@ class Handler(BaseHTTPRequestHandler):
             "access_token": token, "token_type": "Bearer", "expires_in": 86400,
             "device_id": request["device_id"],
             "session_id": request["session_id"],
-            "conversation": {"id": STORE.conversation_id, "title": "Local test conversation"}})
+            "conversation": {"id": pairing["conversation_id"], "title": "Local test conversation"}})
 
     def approval_page(self, pairing_id):
         with STORE.lock:
@@ -219,6 +371,124 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 page = f'<!doctype html><meta charset="utf-8"><title>Baton pairing</title><p>Pairing status: {html.escape(pairing["status"])}.</p>'
         return self.send_html(page)
+
+    def qr_page(self, pairing_id):
+        with STORE.lock:
+            pairing = self.active_pairing(pairing_id)
+            if not pairing: return
+        discovery_url = f"{STORE.base_url}/.well-known/baton/pair/{pairing_id}"
+        page = f'''<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baton pairing QR</title><style>body{{font:16px -apple-system,sans-serif;text-align:center;margin:40px;color:#1d1d1f}}img{{width:min(82vw,360px);image-rendering:pixelated}}code{{overflow-wrap:anywhere;color:#666}}</style>
+<h1>Scan with Baton</h1><img src="/v1/baton/pairings/{pairing_id}/qr.png" alt="Baton pairing QR code"><p>This pairing expires soon.</p><code>{html.escape(discovery_url)}</code>'''
+        return self.send_html(page)
+
+    def qr_png(self, pairing_id):
+        with STORE.lock:
+            pairing = self.active_pairing(pairing_id)
+            if not pairing: return
+        try:
+            import qrcode
+        except ImportError:
+            return self.error(501, "qr_dependency_missing", "Install mock_server/requirements-qr.txt to enable the fixture QR page.")
+        image = qrcode.make(f"{STORE.base_url}/.well-known/baton/pair/{pairing_id}")
+        output = BytesIO()
+        image.save(output, format="PNG")
+        return self.send_png(output.getvalue())
+
+    def console_page(self):
+        """Human-facing fixture console; never a Companion Profile endpoint."""
+        page = '''<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baton local test console</title><style>
+*{box-sizing:border-box}body{font:16px -apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f7;color:#1d1d1f;margin:0}main{max-width:1120px;margin:0 auto;padding:44px 24px}h1{margin:0 0 6px}.sub{color:#6e6e73;margin:0}.layout{display:grid;grid-template-columns:minmax(280px,.82fr) minmax(360px,1.35fr);gap:20px;margin-top:24px}.card{background:white;border-radius:20px;padding:24px;box-shadow:0 2px 12px #00000010}.pair{text-align:center}.eyebrow{font-size:12px;font-weight:700;letter-spacing:.08em;color:#0071e3;text-transform:uppercase}.title{font-size:20px;font-weight:700;margin:8px 0}.status{font-weight:600}.hint{font-size:14px;color:#6e6e73;line-height:1.45}.primary,.secondary{border:0;border-radius:10px;padding:12px 18px;font-size:16px;font-weight:600;cursor:pointer}.primary{background:#0071e3;color:white}.primary:disabled{background:#aab4c0;cursor:default}.secondary{background:#f0f0f3;color:#3a3a3c;font-size:14px;padding:8px 12px}#qr{width:min(75vw,280px);margin:18px auto;display:none}.chat{display:flex;flex-direction:column;height:min(640px,calc(100vh - 210px));min-height:480px;padding:0;overflow:hidden}.chat-head{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:22px 24px 15px;border-bottom:1px solid #e8e8ed}.messages{min-height:0;flex:1;overflow-y:scroll;scrollbar-gutter:stable;padding:20px;display:flex;flex-direction:column;gap:12px;background:#fbfbfc}.message{max-width:82%;padding:11px 13px;border-radius:16px;line-height:1.45;white-space:pre-wrap;word-break:break-word}.message.user{align-self:flex-end;background:#0071e3;color:#fff;border-bottom-right-radius:5px}.message.assistant{align-self:flex-start;background:#fff;box-shadow:0 1px 5px #00000010;border-bottom-left-radius:5px}.message.empty{align-self:center;color:#6e6e73;background:transparent;box-shadow:none;text-align:center;margin:auto}.composer{display:flex;gap:10px;padding:14px;border-top:1px solid #e8e8ed}.composer input{min-width:0;flex:1;border:1px solid #d7d7dc;border-radius:12px;padding:11px 12px;font:inherit}.composer button{padding:10px 15px}.chat-status{font-size:13px;color:#6e6e73;padding:0 20px 10px}@media(max-width:760px){main{padding:28px 16px}.layout{grid-template-columns:1fr}.chat{height:min(560px,calc(100vh - 56px));min-height:440px}}</style>
+<main><h1>Baton 本地联调</h1><div class="layout"><section class="card pair"><div class="eyebrow">Baton Connect</div><h2 class="title">将当前会话交接到手机</h2><button class="primary" id="new">生成新的配对二维码</button><img id="qr" alt="Baton pairing QR"><p id="status" class="status">点击按钮开始。</p><p id="hint" class="hint">手机扫码后，此页面会显示“允许加入”。</p><button class="primary" id="allow" hidden>允许此设备加入</button></section><section class="card chat"><div class="chat-head"><div><div class="eyebrow">Shared Conversation</div><div class="title">Local test conversation</div></div><button class="secondary" id="end">结束</button></div><div id="messages" class="messages"><div class="message empty">正在连接共享会话…</div></div><div id="chat-status" class="chat-status">正在订阅会话事件…</div><form id="composer" class="composer"><input id="text" autocomplete="off" placeholder="在 Web 端继续这段对话"><button class="primary">发送</button></form></section></div></main>
+<script>
+let pairing=null, timer=null, stream=null, conversationEnded=false;
+const $=id=>document.getElementById(id), set=(text,hint)=>{$('status').textContent=text;$('hint').textContent=hint||''};
+async function create(){
+  if($('end').disabled){location.reload();return}
+  $('new').disabled=true; $('allow').hidden=true; set('正在生成二维码…');
+  const r=await fetch('/v1/baton/pairings',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+  if(!r.ok){set('生成失败，请重试。');$('new').disabled=false;return}
+  pairing=await r.json(); $('qr').src='/v1/baton/pairings/'+pairing.pairing_id+'/qr.png'; $('qr').style.display='block';
+  set('请使用 Baton App 扫描二维码。','二维码有效期 60 秒。扫描完成后可直接在此页允许。'); $('new').disabled=false;
+  clearInterval(timer); timer=setInterval(refresh,1000); refresh();
+}
+async function refresh(){
+  if(!pairing)return;
+  const r=await fetch('/v1/baton/pairings/'+pairing.pairing_id+'/mock-status');
+  if(!r.ok){clearInterval(timer);$('allow').hidden=true;set('二维码已过期，正在生成新的二维码。');setTimeout(create,300);return}
+  const state=await r.json();
+  if(state.status==='created')return;
+  if(state.status==='pending'){set('手机已扫描：'+state.device_name,'确认后点击“允许此设备加入”。');$('allow').hidden=false;return}
+  if(state.status==='approved'){set('已允许，正在等待 App 建立会话…');$('allow').hidden=true;return}
+  if(state.status==='consumed'){clearInterval(timer);set('设备已连接。','现在可以在 Baton App 发送消息。');$('allow').hidden=true;return}
+  clearInterval(timer);$('allow').hidden=true;set('配对未完成：'+state.status,'请生成新的二维码。');
+}
+$('new').onclick=create;
+$('allow').onclick=async()=>{ $('allow').disabled=true; const r=await fetch('/v1/baton/pairings/'+pairing.pairing_id+'/approval',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({decision:'approved'})}); if(!r.ok)set('授权失败，请重试。'); await refresh(); $('allow').disabled=false; };
+const messages=new Map(), messageList=$('messages');
+function put(message){if(!message||!message.id)return;messages.set(message.id,message);render();}
+function update(id, change){const message=messages.get(id)||{id,role:'assistant',content:[{type:'text',text:''}],status:'streaming'};change(message);messages.set(id,message);render();}
+function textOf(message){return (message.content||[]).map(part=>part.text||'').join('');}
+function render(){messageList.replaceChildren();if(!messages.size){const empty=document.createElement('div');empty.className='message empty';empty.textContent='开始这段共享对话。';messageList.append(empty);return}for(const message of messages.values()){const item=document.createElement('div');item.className='message '+(message.role==='user'?'user':'assistant');item.textContent=textOf(message)||(message.status==='streaming'?'正在思考…':'');messageList.append(item)}messageList.scrollTop=messageList.scrollHeight;}
+async function loadConversation(){const response=await fetch('/v1/baton/mock/web/conversation');if(!response.ok)throw new Error('snapshot');const snapshot=await response.json();for(const message of snapshot.messages.slice().reverse())put(message);$('chat-status').textContent='已连接 · Local Baton Mock';}
+function closeWebConversation(){if(conversationEnded)return;conversationEnded=true;if(stream)stream.close();messages.clear();render();$('chat-status').textContent='对话已结束。生成新二维码可开始新会话。';$('text').disabled=true;$('end').disabled=true;}
+function subscribe(){stream=new EventSource('/v1/baton/mock/web/events');stream.onopen=()=>{if(!conversationEnded)$('chat-status').textContent='已连接 · 实时同步中';};stream.onerror=()=>{if(!conversationEnded)$('chat-status').textContent='连接中断，正在重试…';};stream.addEventListener('message.created',event=>put(JSON.parse(event.data).data));stream.addEventListener('message.delta',event=>{const data=JSON.parse(event.data).data;update(data.message_id,message=>{message.content=message.content||[{type:'text',text:''}];message.content[0].text=(message.content[0].text||'')+data.delta;message.status='streaming';});});stream.addEventListener('message.completed',event=>{const data=JSON.parse(event.data).data;update(data.message_id,message=>{message.status=data.status||'completed';});});stream.addEventListener('message.failed',event=>{const data=JSON.parse(event.data).data;update(data.message_id,message=>{message.status='failed';message.content=[{type:'text',text:data.message||'回复失败，请重试。'}];});});stream.addEventListener('conversation.closed',closeWebConversation);}
+function webMessageID(){if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.floor(Math.random()*16),v=c==='x'?r:(r&3)|8;return v.toString(16)});}
+$('composer').onsubmit=async event=>{event.preventDefault();const input=$('text'),text=input.value.trim();if(!text)return;input.disabled=true;try{const response=await fetch('/v1/baton/mock/web/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_message_id:webMessageID(),content:[{type:'text',text}]})});if(!response.ok)throw new Error('send');input.value='';}catch{$('chat-status').textContent='发送失败，请重试。';}finally{input.disabled=false;input.focus();}};
+$('end').onclick=async()=>{if(!confirm('结束当前对话？手机端也将自动退出。'))return;const response=await fetch('/v1/baton/mock/web/conversation:end',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(response.ok)closeWebConversation();else $('chat-status').textContent='结束失败，请重试。';};
+subscribe();loadConversation().catch(()=>{$('chat-status').textContent='无法加载会话。';});
+create();
+</script>'''
+        return self.send_html(page)
+
+    def mock_pairing_status(self, pairing_id):
+        with STORE.lock:
+            pairing = self.active_pairing(pairing_id)
+            if not pairing: return
+            request = pairing.get("request") or {}
+            return self.send_json({"pairing_id": pairing_id, "status": pairing["status"],
+                                   "device_name": request.get("device_name")})
+
+    def submit_message(self, body):
+        """Shared message path for the mobile API and fixture-only Web client."""
+        client_id = body.get("client_message_id")
+        text = ((body.get("content") or [{}])[0].get("text") if isinstance(body.get("content"), list) else body.get("text"))
+        try:
+            valid_client_id = isinstance(client_id, str) and str(uuid.UUID(client_id)) == client_id.lower()
+        except (ValueError, AttributeError):
+            valid_client_id = False
+        if not valid_client_id or not isinstance(text, str) or not text.strip():
+            return self.error(400, "invalid_message", "client_message_id and text content are required.")
+        with STORE.condition:
+            if STORE.conversation_closed:
+                return self.error(410, "conversation_closed", "Conversation has ended.")
+            for message in STORE.messages:
+                if message.get("client_message_id") == client_id: return self.send_json(message)
+            message = STORE.add_message("msg_" + uuid.uuid4().hex[:16], client_id, "user", text)
+            STORE.event("message.created", message)
+            run_id = "run_" + uuid.uuid4().hex[:12]
+            assistant = STORE.add_message("msg_" + uuid.uuid4().hex[:16], None, "assistant", "", status="streaming")
+            STORE.runs[run_id] = {"status": "active", "message_id": assistant["id"],
+                                  "epoch": STORE.conversation_epoch}
+            epoch = STORE.conversation_epoch
+            STORE.event("run.started", {"run_id": run_id})
+            STORE.event("message.created", assistant)
+        fixture_log("agent.input.accepted", characters=len(text))
+        threading.Thread(target=self.stream_reply, args=(run_id, text, epoch), daemon=True).start()
+        return self.send_json(message, 201)
+
+    def conversation_snapshot(self):
+        with STORE.lock:
+            if STORE.conversation_closed: return self.error(410, "conversation_closed", "Conversation has ended.")
+            active_runs = [
+                {"run_id": run_id, "status": run["status"], "message_id": run["message_id"]}
+                for run_id, run in STORE.runs.items()
+                if run["status"] == "active" and run["epoch"] == STORE.conversation_epoch
+            ]
+            return self.send_json({"id": STORE.conversation_id, "title": "Local test conversation", "agent_name": "Mock Agent",
+                                   "messages": list(reversed(STORE.messages)),
+                                   "event_cursor": STORE.event_cursor(), "active_runs": active_runs})
 
     def do_POST(self):
         path, raw = urlparse(self.path).path.rstrip("/"), self.raw_body()
@@ -238,32 +508,29 @@ class Handler(BaseHTTPRequestHandler):
             except (ValueError, TypeError): return self.error(400, "invalid_json", "Invalid JSON.")
         try: body = json.loads(raw or b"{}")
         except (ValueError, TypeError): return self.error(400, "invalid_json", "Invalid JSON.")
-        if path.endswith("/messages"):
+        if path == "/v1/baton/mock/web/messages":
+            # A local fixture convenience for the browser demo. Real Web
+            # clients use their existing authenticated Java session instead.
+            return self.submit_message(body)
+        if path == "/v1/baton/mock/web/conversation:end":
+            with STORE.lock: ended = STORE.close_conversation()
+            return self.send_json({"status": "ended" if ended else "already_ended"})
+        conversation_path = f"/v1/baton/conversations/{STORE.conversation_id}"
+        if path == conversation_path + ":end":
             if not self.auth(): return self.error(401, "invalid_token", "Missing or invalid bearer token.")
-            parts = path.split("/")
-            if len(parts) < 5 or parts[4] != STORE.conversation_id: return self.error(404, "conversation_not_found", "Conversation not found.")
-            client_id = body.get("client_message_id")
-            text = ((body.get("content") or [{}])[0].get("text") if isinstance(body.get("content"), list) else body.get("text"))
-            if not client_id or not text: return self.error(400, "invalid_message", "client_message_id and text content are required.")
-            with STORE.condition:
-                for message in STORE.messages:
-                    if message.get("client_message_id") == client_id: return self.send_json(message)
-                message = STORE.add_message("msg_" + uuid.uuid4().hex[:16], client_id, "user", text)
-                STORE.event("message.created", message)
-                run_id = "run_" + uuid.uuid4().hex[:12]
-                STORE.runs[run_id] = {"status": "active", "message_id": None}
-                STORE.event("run.started", {"run_id": run_id})
-            threading.Thread(target=self.stream_reply, args=(run_id, text), daemon=True).start()
-            return self.send_json(message, 201)
-        if ":cancel" in path and "/runs/" in path:
+            with STORE.lock: ended = STORE.close_conversation()
+            return self.send_json({"status": "ended" if ended else "already_ended"})
+        if path == conversation_path + "/messages":
             if not self.auth(): return self.error(401, "invalid_token", "Missing or invalid bearer token.")
-            run_id = path.split("/runs/", 1)[1].split(":", 1)[0]
-            with STORE.lock:
-                run = STORE.runs.get(run_id)
-                if not run: return self.error(404, "run_not_found", "Run not found.")
-                if run["status"] == "active": run["status"] = "cancellation_requested"
-                status = run["status"]
-            return self.send_json({"run_id": run_id, "status": status}, 202 if status == "cancellation_requested" else 200)
+            return self.submit_message(body)
+        if path.startswith(conversation_path + "/runs/") and path.endswith(":cancel"):
+            if not self.auth(): return self.error(401, "invalid_token", "Missing or invalid bearer token.")
+            run_id = path[len(conversation_path + "/runs/"):-len(":cancel")]
+            if not run_id: return self.error(404, "run_not_found", "Run not found.")
+            status, emitted = STORE.cancel_run(run_id)
+            if status is None: return self.error(404, "run_not_found", "Run not found.")
+            if emitted: fixture_log("agent.reply.cancelled")
+            return self.send_json({"run_id": run_id, "status": status}, 202 if emitted else 200)
         if path == "/v1/baton/mock/events:retention":
             # This authenticated endpoint exists only to make a finite-log
             # resync test deterministic.  It is intentionally undocumented as
@@ -274,42 +541,83 @@ class Handler(BaseHTTPRequestHandler):
                 return self.error(400, "invalid_mock_retention", "retain_last must be a positive integer.")
             with STORE.lock: STORE.set_event_retention_for_test(retain_last)
             return self.send_json({"retain_last": retain_last, "retained_events": len(STORE.events)})
+        if path == "/v1/baton/mock/chat:fail-next":
+            # Authenticated, one-shot smoke hook. It verifies the Baton error
+            # terminal order without depending on an external LLM outage.
+            if not self.auth(): return self.error(401, "invalid_token", "Missing or invalid bearer token.")
+            with STORE.lock: STORE.fail_next_completion_for_test = True
+            return self.send_json({"status": "armed"})
+        if path == "/v1/baton/mock/chat:slow-next":
+            # Authenticated test hook for a provider that cannot be cancelled
+            # mid-request. It proves Baton terminal state wins immediately.
+            if not self.auth(): return self.error(401, "invalid_token", "Missing or invalid bearer token.")
+            seconds = body.get("seconds", 1)
+            if not isinstance(seconds, (int, float)) or isinstance(seconds, bool) or not 0 < seconds <= 3:
+                return self.error(400, "invalid_mock_delay", "seconds must be between 0 and 3.")
+            with STORE.lock: STORE.slow_next_completion_seconds = seconds
+            return self.send_json({"status": "armed"})
         return self.error(404, "not_found", "Not found.")
 
-    def stream_reply(self, run_id, text):
-        reply, message_id = "Mock 回复：" + text, "msg_" + uuid.uuid4().hex[:16]
+    def stream_reply(self, run_id, text, epoch):
+        """Stream only while this run still belongs to the live conversation.
+
+        Provider calls cannot always be interrupted.  The Store terminal state is
+        therefore authoritative: a late result after cancel/end is silently
+        discarded instead of becoming an event in a later fixture conversation.
+        """
         with STORE.lock:
-            run = STORE.runs.get(run_id)
-            if not run: return
-            run["message_id"] = message_id
-        STORE.event("message.created", {"id": message_id, "conversation_id": STORE.conversation_id,
-                    "role": "assistant", "content": [{"type": "text", "text": ""}], "status": "streaming"})
+            if not STORE.is_current_run(run_id, epoch): return
+            run = STORE.runs[run_id]
+            message_id = run["message_id"]
+            history = list(STORE.messages)
+            fail_for_smoke = STORE.fail_next_completion_for_test
+            STORE.fail_next_completion_for_test = False
+            slow_seconds = STORE.slow_next_completion_seconds
+            STORE.slow_next_completion_seconds = 0
+        try:
+            fixture_log("agent.reply.requested")
+            if slow_seconds:
+                time.sleep(slow_seconds)
+            if fail_for_smoke:
+                # Deliberately ordinary, non-provider failure. The same safe
+                # terminal sequence must handle any upstream implementation bug.
+                raise RuntimeError("fixture completion failure")
+            reply = CHAT_COMPLETER.complete(history) if CHAT_COMPLETER else "Mock 回复：" + text
+            if not isinstance(reply, str) or not reply:
+                raise RuntimeError("fixture completion was invalid")
+            fixture_log("agent.reply.ready", characters=len(reply))
+        except Exception:
+            with STORE.lock:
+                if not STORE.is_current_run(run_id, epoch): return
+                run = STORE.runs[run_id]
+                run["status"] = "failed"
+                message = next(item for item in STORE.messages if item["id"] == message_id)
+                message["status"] = "failed"
+                STORE.event("message.failed", {"message_id": message_id, "message": "LLM 暂时不可用，请重试。"})
+                STORE.event("run.completed", {"run_id": run_id, "status": "failed"})
+            fixture_log("agent.reply.failed")
+            return
         for chunk in [reply[i:i + 4] for i in range(0, len(reply), 4)]:
             time.sleep(.04)
             with STORE.lock:
-                run = STORE.runs.get(run_id)
-                if not run or run["status"] == "cancellation_requested":
-                    if run: run["status"] = "cancelled"
-                    STORE.event("message.completed", {"message_id": message_id, "status": "cancelled"})
-                    STORE.event("run.cancelled", {"run_id": run_id, "status": "cancelled"})
-                    return
-            STORE.event("message.delta", {"message_id": message_id, "delta": chunk})
-        with STORE.condition:
-            run = STORE.runs.get(run_id)
-            if not run or run["status"] != "active":
-                if run and run["status"] != "cancelled":
-                    run["status"] = "cancelled"
-                    STORE.event("message.completed", {"message_id": message_id, "status": "cancelled"})
-                    STORE.event("run.cancelled", {"run_id": run_id, "status": "cancelled"})
-                return
+                if not STORE.is_current_run(run_id, epoch): return
+                message = next(item for item in STORE.messages if item["id"] == message_id)
+                message["content"][0]["text"] += chunk
+                STORE.event("message.delta", {"message_id": message_id, "delta": chunk})
+        with STORE.lock:
+            if not STORE.is_current_run(run_id, epoch): return
+            run = STORE.runs[run_id]
             run["status"] = "completed"
-            STORE.add_message(message_id, None, "assistant", reply)
-        STORE.event("message.completed", {"message_id": message_id, "status": "completed"})
-        STORE.event("run.completed", {"run_id": run_id, "status": "completed"})
+            message = next(item for item in STORE.messages if item["id"] == message_id)
+            message["status"] = "completed"
+            STORE.event("message.completed", {"message_id": message_id, "status": "completed"})
+            STORE.event("run.completed", {"run_id": run_id, "status": "completed"})
+        fixture_log("agent.reply.completed")
 
     def do_GET(self):
         path = urlparse(self.path).path.rstrip("/")
         discovery_prefix, pairing_prefix = "/.well-known/baton/pair/", "/v1/baton/pairings/"
+        if path == "": return self.console_page()
         if path.startswith(discovery_prefix):
             pairing_id = path[len(discovery_prefix):]
             with STORE.lock:
@@ -318,23 +626,27 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json({"protocol": "baton/1.0", "pairing_id": pairing_id,
                 "expires_at": datetime.fromtimestamp(pairing["expires_at"], timezone.utc).isoformat().replace("+00:00", "Z"),
                 "service": {"id": "local-mock", "name": "Local Baton Mock"},
-                "conversation": {"id": STORE.conversation_id, "title": "Local test conversation", "agent_name": "Mock Agent"},
+                "conversation": {"id": pairing["conversation_id"], "title": "Local test conversation", "agent_name": "Mock Agent"},
                 "endpoints": {"join": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/requests",
                               "approval": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/approval",
                               "conversation": f"{STORE.base_url}/v1/baton/conversations/{STORE.conversation_id}"},
                 "capabilities": {"text": True, "markdown": True, "streaming": True}})
         if path.startswith(pairing_prefix) and path.endswith("/approval"):
             return self.approval_page(path[len(pairing_prefix):-len("/approval")].strip("/"))
+        if path.startswith(pairing_prefix) and path.endswith("/qr"):
+            return self.qr_page(path[len(pairing_prefix):-len("/qr")].strip("/"))
+        if path.startswith(pairing_prefix) and path.endswith("/qr.png"):
+            return self.qr_png(path[len(pairing_prefix):-len("/qr.png")].strip("/"))
+        if path.startswith(pairing_prefix) and path.endswith("/mock-status"):
+            return self.mock_pairing_status(path[len(pairing_prefix):-len("/mock-status")].strip("/"))
         if path.startswith(pairing_prefix) and "/requests/" in path:
             pairing_id, request_id = path[len(pairing_prefix):].split("/requests/", 1)
             return self.poll_pairing(pairing_id, request_id)
+        if path == "/v1/baton/mock/web/conversation": return self.conversation_snapshot()
+        if path == "/v1/baton/mock/web/events": return self.sse()
         if not self.auth(): return self.error(401, "invalid_token", "Missing or invalid bearer token.")
         conversation_path = f"/v1/baton/conversations/{STORE.conversation_id}"
-        if path == conversation_path:
-            with STORE.lock:
-                return self.send_json({"id": STORE.conversation_id, "title": "Local test conversation", "agent_name": "Mock Agent",
-                                       "messages": list(reversed(STORE.messages)), "next_cursor": None,
-                                       "event_cursor": STORE.event_cursor()})
+        if path == conversation_path: return self.conversation_snapshot()
         if path == conversation_path + "/events": return self.sse()
         return self.error(404, "not_found", "Not found.")
 
@@ -354,7 +666,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("X-Accel-Buffering", "no")
-        self.send_header("Connection", "keep-alive")
+        # HTTP/1.1 SSE is an open-ended response. Chunk framing lets URLSession
+        # deliver each flushed envelope immediately instead of waiting for the
+        # fixture's eventual connection close.
+        self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
         if resync:
             # This is a standard Baton envelope, but deliberately not appended
@@ -368,7 +683,7 @@ class Handler(BaseHTTPRequestHandler):
                            "type": "conversation.resync", "occurred_at": now(),
                            "data": {"reason": "cursor_unknown_or_expired"}}
             if not self.write_sse(control): return
-        deadline = time.time() + 30
+        deadline = time.time() + SSE_LIVE_SECONDS
         while time.time() < deadline:
             with STORE.condition:
                 pending = [e for e in STORE.events if e["sequence"] > last]
@@ -377,18 +692,23 @@ class Handler(BaseHTTPRequestHandler):
                     pending = [e for e in STORE.events if e["sequence"] > last]
             if not pending:
                 try:
-                    self.wfile.write(b": heartbeat\n\n"); self.wfile.flush()
+                    self.write_chunk(b": heartbeat\n\n")
                 except (BrokenPipeError, ConnectionResetError):
                     return
                 continue
             for event in pending:
                 if not self.write_sse(event): return
                 last = event["sequence"]
+        self.write_chunk(b"", final=True)
 
     def write_sse(self, event):
         raw = ("id: %s\nevent: %s\ndata: %s\n\n" % (event["id"], event["type"], json.dumps(event, ensure_ascii=False))).encode()
+        return self.write_chunk(raw)
+
+    def write_chunk(self, payload, *, final=False):
+        frame = b"0\r\n\r\n" if final else f"{len(payload):X}\r\n".encode() + payload + b"\r\n"
         try:
-            self.wfile.write(raw); self.wfile.flush()
+            self.wfile.write(frame); self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             return False
         return True
@@ -410,15 +730,38 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    global STORE
+    global STORE, CHAT_COMPLETER, SSE_LIVE_SECONDS
     parser = argparse.ArgumentParser(description="Local Baton Companion mock server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--public-base-url", help="advertised URL when binding a LAN interface (fixture only)")
     parser.add_argument("--event-retention", type=int, default=64, help="retained SSE event envelopes per conversation (fixture only)")
+    parser.add_argument("--sse-live-seconds", type=int, default=300, help="maximum duration of one fixture SSE connection")
+    parser.add_argument("--openai-chat-completions-url", help="optional OpenAI-compatible chat completion endpoint")
+    parser.add_argument("--openai-model", help="model for the optional OpenAI-compatible endpoint")
+    parser.add_argument("--openai-reasoning-effort", choices=("none", "low", "medium", "high"), help="optional provider-specific reasoning setting")
+    parser.add_argument("--api-key-env", default="LM_STUDIO_KEY", help="environment variable holding the optional provider key")
     args = parser.parse_args()
-    STORE = Store(f"http://{args.host}:{args.port}", event_retention=args.event_retention)
+    if args.sse_live_seconds < 1:
+        parser.error("--sse-live-seconds must be positive")
+    if bool(args.openai_chat_completions_url) != bool(args.openai_model):
+        parser.error("--openai-chat-completions-url and --openai-model must be supplied together")
+    if args.openai_chat_completions_url:
+        import os
+        api_key = os.environ.get(args.api_key_env)
+        if not api_key:
+            parser.error(f"environment variable {args.api_key_env} is required when an OpenAI-compatible backend is enabled")
+        CHAT_COMPLETER = OpenAICompatibleChatCompleter(
+            args.openai_chat_completions_url,
+            args.openai_model,
+            api_key,
+            reasoning_effort=args.openai_reasoning_effort,
+        )
+    SSE_LIVE_SECONDS = args.sse_live_seconds
+    STORE = Store(args.public_base_url or f"http://{args.host}:{args.port}", event_retention=args.event_retention)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"Baton mock server listening at {STORE.base_url}", flush=True)
+    provider = f" with OpenAI-compatible model {args.openai_model}" if CHAT_COMPLETER else " with deterministic replies"
+    print(f"Baton mock server listening at {STORE.base_url}{provider}", flush=True)
     try: server.serve_forever()
     except KeyboardInterrupt: pass
     finally: server.server_close()

@@ -48,11 +48,11 @@ Baton/
 
 用 Xcode 打开 `Baton.xcodeproj`，选择 iOS Simulator 或已配置的真机运行。
 
-Debug 仅允许 `localhost` / `127.0.0.1` 的 HTTP，以便连接本地 fixture；Release 只接受 HTTPS。不要为了调试扩大 ATS 例外。
+Debug 仅允许回环或 RFC1918 私有局域网地址的 HTTP，以便连接本地 fixture；Release 只接受 HTTPS。不要把此开发例外扩展到公网地址。
 
 ### Python fixture
 
-Python fixture 只用于本地契约验证：内存单会话、无真实登录、不会读取或调用任何模型密钥。
+Python fixture 只用于本地契约验证：内存单会话、无真实登录。默认生成确定性回复；仅在显式传入 OpenAI-compatible 启动参数时，才从当前进程环境读取模型密钥，密钥不会写入仓库、日志或 iOS App。
 
 ```sh
 python3 mock_server/mock_server.py

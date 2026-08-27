@@ -103,6 +103,20 @@ final class SpeechInputService: ObservableObject {
         state = .idle
     }
 
+    /// A sent message owns the current transcript. Invalidate the active
+    /// session before clearing the composer so a late on-device result cannot
+    /// repopulate text that the user has already sent.
+    func discardTranscript() {
+        let needsTearDown = activeSessionID != nil || state.isWorking || reservedLocale != nil
+        activeSessionID = nil
+        startTask?.cancel()
+        resultsTask?.cancel()
+        prefix = ""
+        transcript = ""
+        state = .idle
+        if needsTearDown { Task { [weak self] in await self?.tearDown() } }
+    }
+
     private func start(sessionID: UUID) async {
         do {
             guard await requestPermissions(), isCurrent(sessionID) else {
@@ -114,8 +128,10 @@ final class SpeechInputService: ObservableObject {
                 return
             }
 
-            let requestedLocale = Locale.autoupdatingCurrent
-            guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: requestedLocale) else {
+            let requestedLocale = SpeechTranscriptionLocaleResolver.preferredRequestLocale()
+            guard let locale = await SpeechTranscriptionLocaleResolver.resolveSupportedLocale(
+                requested: requestedLocale
+            ) else {
                 state = .unavailable("当前语言（\(requestedLocale.identifier)）没有可用的本地语音模型。")
                 return
             }
@@ -123,14 +139,13 @@ final class SpeechInputService: ObservableObject {
 
             let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
             let modules: [any SpeechModule] = [transcriber]
+            // Reserve before requesting installation. Apple's installation
+            // request auto-reserves a locale when needed; doing it afterward
+            // makes reserve return false (already reserved), which is not an
+            // error and previously blocked every first use.
+            let reservedNow = try await AssetInventory.reserve(locale: locale)
+            if reservedNow { reservedLocale = locale }
             try await ensureAssets(for: modules, sessionID: sessionID)
-            guard isCurrent(sessionID) else { return }
-
-            guard try await AssetInventory.reserve(locale: locale) else {
-                state = .unavailable("无法为当前语言保留本地语音模型，请稍后重试。")
-                return
-            }
-            reservedLocale = locale
             guard isCurrent(sessionID) else { return }
 
             try configureAudioSession()
@@ -144,6 +159,11 @@ final class SpeechInputService: ObservableObject {
                 await tearDown()
                 return
             }
+            guard let converter = AVAudioConverter(from: naturalFormat, to: audioFormat) else {
+                state = .unavailable("无法将此麦克风的音频转换为本地听写格式。")
+                await tearDown()
+                return
+            }
 
             let analyzer = SpeechAnalyzer(modules: modules)
             try await analyzer.prepareToAnalyze(in: audioFormat)
@@ -151,8 +171,12 @@ final class SpeechInputService: ObservableObject {
 
             let (inputStream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
             inputContinuation = continuation
-            inputNode.installTap(onBus: 0, bufferSize: 1_024, format: audioFormat) { buffer, _ in
-                continuation.yield(AnalyzerInput(buffer: buffer))
+            // An input node renders in the microphone's hardware format. It
+            // cannot be retuned by a tap (for example, 48 kHz Float32 to the
+            // analyzer's 16 kHz Int16), so capture natively and convert here.
+            inputNode.installTap(onBus: 0, bufferSize: 4_800, format: nil) { buffer, _ in
+                guard let converted = Self.convert(buffer, with: converter, to: audioFormat) else { return }
+                continuation.yield(AnalyzerInput(buffer: converted))
             }
             hasInstalledTap = true
             try await analyzer.start(inputSequence: inputStream)
@@ -276,6 +300,30 @@ final class SpeechInputService: ObservableObject {
         try session.setActive(true)
     }
 
+    private nonisolated static func convert(
+        _ input: AVAudioPCMBuffer,
+        with converter: AVAudioConverter,
+        to outputFormat: AVAudioFormat
+    ) -> AVAudioPCMBuffer? {
+        let ratio = outputFormat.sampleRate / input.format.sampleRate
+        let capacity = max(1, AVAudioFrameCount((Double(input.frameLength) * ratio).rounded(.up)) + 32)
+        guard let output = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else { return nil }
+
+        var suppliedInput = false
+        var conversionError: NSError?
+        let status = converter.convert(to: output, error: &conversionError) { _, inputStatus in
+            guard !suppliedInput else {
+                inputStatus.pointee = .noDataNow
+                return nil
+            }
+            suppliedInput = true
+            inputStatus.pointee = .haveData
+            return input
+        }
+        guard conversionError == nil, status == .haveData, output.frameLength > 0 else { return nil }
+        return output
+    }
+
     private func requestPermissions() async -> Bool {
         let microphoneGranted: Bool
         switch AVAudioApplication.shared.recordPermission {
@@ -310,6 +358,64 @@ final class SpeechInputService: ObservableObject {
 
     private func isCurrent(_ sessionID: UUID) -> Bool {
         activeSessionID == sessionID && !Task.isCancelled
+    }
+}
+
+/// Resolves the system's preferred dictation locale before asking Apple for an
+/// equivalent on-device model. `Locale.autoupdatingCurrent` can describe the
+/// device's region rather than the user's first language; for Simplified
+/// Chinese we therefore begin with `Locale.preferredLanguages` and keep a
+/// small set of equivalent language/script/region candidates.
+enum SpeechTranscriptionLocaleResolver {
+    static func preferredRequestLocale(
+        currentLocale: Locale = .autoupdatingCurrent,
+        preferredLanguageIdentifiers: [String] = Locale.preferredLanguages
+    ) -> Locale {
+        guard let firstPreferredLanguage = preferredLanguageIdentifiers.first else {
+            return currentLocale
+        }
+
+        let preferredLocale = Locale(identifier: firstPreferredLanguage)
+        return isSimplifiedChinese(preferredLocale) ? preferredLocale : currentLocale
+    }
+
+    static func resolveSupportedLocale(requested: Locale) async -> Locale? {
+        for candidate in candidates(for: requested) {
+            if let supported = await SpeechTranscriber.supportedLocale(equivalentTo: candidate) {
+                return supported
+            }
+        }
+        return nil
+    }
+
+    static func candidates(for requested: Locale) -> [Locale] {
+        guard isSimplifiedChinese(requested) else { return [requested] }
+
+        let language = "zh"
+        let region = requested.region?.identifier.uppercased()
+        let identifiers = [
+            requested.identifier,
+            region.map { "\(language)-Hans-\($0)" },
+            region.map { "\(language)-\($0)" },
+            "zh-Hans-CN",
+            "zh-Hans",
+            "zh-CN"
+        ].compactMap { $0 }
+
+        var seen = Set<String>()
+        return identifiers.compactMap { identifier in
+            let locale = Locale(identifier: identifier)
+            return seen.insert(locale.identifier.lowercased()).inserted ? locale : nil
+        }
+    }
+
+    private static func isSimplifiedChinese(_ locale: Locale) -> Bool {
+        guard locale.language.languageCode?.identifier.lowercased() == "zh" else { return false }
+
+        let script = locale.language.script?.identifier.lowercased()
+        let region = locale.region?.identifier.uppercased()
+        if script == "hant" || ["HK", "MO", "TW"].contains(region) { return false }
+        return script == "hans" || ["CN", "SG"].contains(region) || (script == nil && region == nil)
     }
 }
 

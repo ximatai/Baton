@@ -8,16 +8,17 @@
 	<string>Baton 使用相机扫描网页展示的 Pairing 二维码，以请求加入当前 Agent 对话。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Baton 使用系统的本地语音识别将语音转成可编辑的聊天文字。</string>
-	<!-- The local Python fixture is available only to Debug builds. -->
+	<!--
+	 This Debug-only ATS relaxation is required because a hotspot/private-LAN
+	 fixture has a dynamic IPv4 address. It is not a trust decision: every
+	 URLSession endpoint remains gated by BatonDebugHTTPHostPolicy, which only
+	 permits loopback or RFC1918 IPv4 HTTP. Release has no such exception.
+	-->
 	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSExceptionDomains</key>
-		<dict>
-			<key>127.0.0.1</key>
-			<dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
-			<key>localhost</key>
-			<dict><key>NSExceptionAllowsInsecureHTTPLoads</key><true/></dict>
-		</dict>
+		<!-- Runtime policy still rejects public HTTP and all non-private hosts. -->
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
 	</dict>
 </dict>
 </plist>

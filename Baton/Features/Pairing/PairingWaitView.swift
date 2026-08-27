@@ -6,7 +6,7 @@ struct PairingWaitView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                ProgressView().controlSize(.regular)
+                ProgressView().controlSize(.regular).tint(.accentColor)
                 VStack(alignment: .leading, spacing: 3) {
                     Text("等待网页确认").font(.headline)
                     Text(model.pendingServiceName ?? "正在连接服务").font(.subheadline).foregroundStyle(.secondary)
@@ -23,7 +23,9 @@ struct PairingWaitView: View {
                 .buttonStyle(.borderedProminent)
                 .accessibilityHint("在服务端网页中确认或拒绝此设备请求")
             }
-            Button("取消等待", role: .cancel) { model.cancelPendingPairing() }.frame(maxWidth: .infinity, alignment: .trailing)
+            Button("取消等待", role: .cancel) { model.cancelPendingPairing() }
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, alignment: .trailing)
         }
     }
 }

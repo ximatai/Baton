@@ -28,8 +28,7 @@ between the browser and the phone.
 ## Scope
 
 Included: QR pairing, text and Markdown messages, history, streaming output,
-stop generation, reconnect/resume, recently used services/conversations, and
-on-device speech-to-text.
+stop generation, reconnect/resume, and on-device speech-to-text.
 
 Explicitly deferred: image/camera/file input, **Agent action approvals** (HITL),
 tool UI, generated UI, location, Face ID confirmation, and push notification.
@@ -123,7 +122,8 @@ the same `device_proof` receives the same token. This handles a lost response
 without requiring the user to rescan. The pairing becomes `consumed` after its
 first successful claim and still rejects every other device; it is not reusable
 for a second join. Tokens are stored in Keychain. Revoking a device invalidates
-all its refresh tokens and active streams.
+its active token and streams. Refresh-token semantics are intentionally outside
+Baton V1.
 
 ### Pairing state machine
 
@@ -161,12 +161,17 @@ app render a trustworthy pending-connection screen and submit a join request.
 ```
 
 The app must validate the endpoint origins against the QR origin (same origin
-in V1).  Remote icon URLs are optional and should be fetched as untrusted
+in V1). `capabilities` is a **server discovery declaration** in V1, not a
+negotiation exchange: `text` is required and must be `true`; `markdown` and
+`streaming` declare optional server behavior. A client may safely ignore an
+unknown key. Remote icon URLs are optional and should be fetched as untrusted
 content.
 
 ## Conversation HTTP API
 
-All requests below use `Authorization: Bearer <access-token>` and return JSON.
+All endpoints return JSON. Baton Conversation calls use
+`Authorization: Bearer <access-token>`; pairing creation/approval use the
+host Web application's existing authenticated session and CSRF protection.
 
 The web server creates a QR pairing with `POST /v1/baton/pairings`, authenticated
 as the web user. The response includes `pairing_id`, `qr_url`, an `approval_url`,
@@ -191,15 +196,40 @@ authenticated web page.
 
 | Operation | Endpoint | Purpose |
 | --- | --- | --- |
-| Snapshot | `GET /v1/baton/conversations/{id}` | Conversation metadata, paged history, and an atomic resumable event cursor |
+| Snapshot | `GET /v1/baton/conversations/{id}` | Conversation metadata, bounded initial history, live runs, and an atomic resumable event cursor |
 | Send | `POST /v1/baton/conversations/{id}/messages` | Idempotently creates a user message |
 | Events | `GET /v1/baton/conversations/{id}/events` | SSE stream; supports `Last-Event-ID` |
 | Stop | `POST /v1/baton/conversations/{id}/runs/{runId}:cancel` | Requests cancellation of a live agent run |
+| End | `POST /v1/baton/conversations/{id}:end` | Ends the shared conversation as a server-side transaction; requires the service's `conversation:close` permission |
 | Disconnect | `DELETE /v1/baton/devices/{deviceId}/sessions/{id}` | Revokes this conversation session |
 
 Every client-created message carries a UUID `client_message_id`; retries with
-the same value must return the originally created server message. Message
-history is cursor paginated, newest page first.
+the same value must return the originally created server message.
+
+### Ending a shared conversation
+
+`POST ...:end` is a service-authorized transaction, not a client-side clear.
+The caller must have the service's `conversation:close` permission; a valid
+credential without that permission receives `403 conversation_close_forbidden`.
+The request carries an `Idempotency-Key` UUID. The first accepted request
+atomically marks the Conversation closed, invalidates every active
+conversation session token, expires every unclaimed/pending pairing for that
+Conversation, and fences any active Agent run. It then appends and broadcasts
+exactly one persisted `conversation.closed` envelope and closes established
+event streams after that envelope is flushed.
+
+Fencing means the server asks the Agent runtime to stop, but does not wait for
+an external model provider. Once closed, no worker may append a delta,
+completion, failure, or new message; a late result is discarded. The terminal
+`conversation.closed` event supersedes any in-flight run state. A retry with
+the same idempotency key returns the original successful result without a
+second transition or event, even though that session is otherwise revoked.
+All other future use of a revoked token fails with `401 session_revoked`.
+
+A closed Conversation is never reset or reopened. To start again, the Web
+application creates a **new Conversation with a new `conversation_id`** and
+then creates a new pairing. Its event sequence starts independently; ids or
+sequences from the closed Conversation are never reused.
 
 ### Atomic snapshot and SSE resumption
 
@@ -211,10 +241,25 @@ event log position. It includes an `event_cursor`; the client sends
 {
   "id": "conv_01J...",
   "messages": [],
-  "next_cursor": null,
+  "history_truncated": false,
+  "active_runs": [
+    { "run_id": "run_01J...", "status": "running", "message_id": "msg_01J..." }
+  ],
   "event_cursor": { "id": "evt_01J...", "sequence": 487 }
 }
 ```
+
+V1 has no client history-pagination API. `messages` is the complete initial
+history window, ordered oldest to newest, with a hard maximum of the newest
+200 messages and 1 MiB of UTF-8 serialized message content (whichever limit
+is reached first). If older history does not fit, the server returns the newest
+whole-message window and `history_truncated: true`; it never returns a partial
+message and it does not expose `next_cursor`. Old history remains a concern of
+the host Web product, not Baton V1. `active_runs` is optional and defaults to
+an empty array for clients that predate it. When present it is atomically read
+with the history and cursor, and lists only non-terminal runs as
+`{run_id, status, message_id?}`. Its `run_id` is the value the client must
+retain after reconnect so it can continue to offer Stop.
 
 The server must not append an event between the returned message snapshot and
 the recorded cursor. A valid `Last-Event-ID` replays only envelopes whose
@@ -234,6 +279,33 @@ not itself persisted in the Conversation log. The client must fetch a fresh
 snapshot, replace its stored cursor with that snapshot's `event_cursor`, and
 continue from there. Reusing the latest retained id also makes old clients that
 persist every envelope id reconnect safely.
+
+### SSE transport and sequence rules
+
+The events endpoint returns `200 Content-Type: text/event-stream; charset=utf-8`
+and `Cache-Control: no-cache`, with buffering disabled where the hosting stack
+requires it. Persisted envelopes are UTF-8 JSON sent with standard `id:`,
+`event:`, and `data:` fields followed by one blank line; `event` equals the
+envelope `type`. Comment heartbeats are allowed and carry no Baton envelope.
+HTTP error responses are JSON, never a partial SSE event.
+
+The server emits each retained envelope once in strictly increasing `sequence`
+order for a subscription/replay and never intentionally skips a retained
+sequence. A client persists the last accepted `{id, sequence}`. It may ignore
+an exact duplicate of an already accepted envelope, but a changed id for an
+old sequence, a non-increasing new sequence, or a gap (`sequence > previous +
+1`) is a continuity failure: it must stop applying events and fetch a fresh
+snapshot. The server uses `conversation.resync` for an unknown/expired cursor;
+clients use the same snapshot recovery path for transport or sequence failures.
+
+Stable V1 HTTP/error semantics are: `401 invalid_token` or `session_revoked`
+for missing, invalid, or revoked credentials; `403 conversation_close_forbidden`
+for a valid credential lacking close permission; `404 conversation_not_found`
+for an unknown id; and `410 conversation_closed` only when a request was
+authenticated before the close boundary and is rejected by that boundary.
+Clients treat `401 session_revoked`, `410 conversation_closed`, and
+`conversation.closed` as terminal: discard local credential and return to
+pairing. Other errors are recoverable only according to their explicit code.
 
 ### Message model
 
@@ -284,47 +356,48 @@ V1 event types:
   once when the active run reaches terminal cancellation, after its streaming
   message has received `message.completed` with `status: "cancelled"`.
 - `conversation.resync` — client must refetch history and replace its cursor.
+- `conversation.closed` — exactly one persisted terminal envelope for a close
+  transaction. It is delivered to every stream already attached to the
+  Conversation, after which clients discard credentials and return to pairing.
+  No later envelope may be appended for that Conversation.
 
 Unknown event types must be ignored after recording diagnostic metadata. This is
 the extension point for tool progress, client capability requests, approvals,
 and multimodal content.
 
-## Capability negotiation
+## Capabilities
 
-The server advertises what it can render/accept; the device advertises what it
-can provide.  Neither side assumes a capability merely because it exists in a
-future specification.
+The discovery document's `capabilities` object is the only V1 capability
+surface. It declares what this server accepts or emits for this Conversation;
+it is not a request for device capabilities and it does not grant permission.
+`text: true` is mandatory. `markdown` and `streaming` may be declared when
+implemented. The iOS app is voice-capable by local product design, but it does
+not advertise that fact on the wire in V1.
 
-```json
-{
-  "server": { "text": true, "markdown": true, "streaming": true },
-  "device": { "text_input": true, "on_device_speech_to_text": true }
-}
-```
-
-Future keys such as `camera`, `file`, `approval`, `location`, and
-`notification` are reserved but unsupported by the V1 UI.
+Bidirectional capability negotiation, per-device capabilities, and future keys
+such as `camera`, `file`, `approval`, `location`, and `notification` are
+explicitly deferred. A future version must define their lifecycle and fallback
+semantics rather than treating unknown keys as negotiated support.
 
 ## iOS application boundaries
 
-Use SwiftUI with Observation and Swift Concurrency.  Do not let views make
-network requests or access Speech directly.
+Use SwiftUI with a V1 coordinator and Swift Concurrency. Do not let views make
+network requests, access Keychain, or access Speech directly.
 
 ```text
 Baton
-├── App                 composition root, navigation, dependency container
-├── Domain              Service, Conversation, Message, Pairing, Connection
-├── CompanionProtocol   discovery/pairing API, auth, SSE codec, DTO mapping
-├── Conversation        timeline state, send/retry/cancel, reconnect/resync
-├── Speech              microphone capture and on-device transcription
-├── Persistence         SwiftData cache + Keychain credentials
-└── Features            Home, QR Scan, Pairing Approval, Conversation, Composer
+├── App                 root routing and the V1 session coordinator
+├── Features            Pairing, Conversation, Speech
+└── Core
+    ├── Protocol        discovery/pairing API, auth, SSE codec, DTO mapping
+    ├── Conversation    timeline reducer and event cursor handling
+    ├── Persistence     Keychain credentials and durable message outbox
+    └── Presentation    safe Markdown rendering
 ```
 
-Persist services, conversation metadata, cached messages, and last event ID in
-SwiftData.  Persist access/refresh credentials only in Keychain.  The cache is
-never authoritative; on opening a conversation, reconcile it with the server
-snapshot and stream.
+Persist access credentials, pairing proof, and the durable message outbox only
+in Keychain. The server remains authoritative: each restored session begins
+with a fresh snapshot and then resumes SSE from its atomic event cursor.
 
 For iOS 26.5, `SpeechAnalyzer`/`SpeechTranscriber` is the primary implementation
 and must be availability-checked.  Audio remains on device; only the edited

@@ -22,7 +22,7 @@ App → Features → Core → Apple frameworks / URLSession / Keychain
 
 - 不读取、打印、提交或写入 API Key、token、`device_proof`、Cookie。
 - QR 不含 token；扫码不等于授权，必须经过网页确认。
-- Release 仅 HTTPS；HTTP 只允许 Debug 的本地 fixture。
+- Release 仅 HTTPS；HTTP 只允许 Debug 的回环或私有局域网 fixture。
 - Markdown 不使用 WebView；HTML 或混合 HTML 按纯文本显示。
 
 ## 验证

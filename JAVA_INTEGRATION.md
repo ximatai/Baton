@@ -13,6 +13,14 @@
 
 服务器是 Conversation 的唯一事实源。Web 与 Baton 是同一会话的平级客户端，客户端之间不直接传递消息。
 
+## V1 capabilities
+
+Discovery document 内的 `capabilities` 只是服务端对当前 Conversation
+的能力声明，不是设备协商、也不授予权限。`text: true` 为 V1 必填；
+`markdown`、`streaming` 仅在服务真正支持时声明。iOS 的本地语音能力
+不需要也不应在 V1 回传。未来若要支持 camera/file/approval 等双向能力，
+必须另行定义协商、授权与降级语义，不能把未知字段视为已经协商成功。
+
 ## 配对与浏览器授权
 
 生产 Java 服务应按以下状态机实现：
@@ -42,17 +50,32 @@ Java 服务应使 approval 具有服务端授权检查和一次性状态转换�
 | 加入请求 | `POST /v1/baton/pairings/{id}/requests` | Baton；JSON 提交 `device_id`、`device_name`、`device_proof`；成功为 `202 pending` 并返回 `request_id`、`poll_url` | 字段/低熵 proof `400 invalid_device`；已有请求/非 created `409 pairing_not_available`；未知/过期同上 |
 | 状态/claim | `GET /v1/baton/pairings/{id}/requests/{requestId}` | Baton；必须带 `X-Baton-Device-Proof`；pending 返回重试间隔，approved 返回 token，rejected 返回终态 | proof 不符 `403 invalid_device_proof`；请求不存在 `404 request_not_found`；不可用 `409 pairing_not_available` |
 | 决定 pairing | `POST /v1/baton/pairings/{id}/approval` | Web；现有登录和 CSRF 保护下提交 `{ "decision": "approved"\|"rejected" }` | 无效决定 `400 invalid_decision`；非 pending `409 pairing_not_pending`；未登录/无权由现有 Web 授权层拒绝 |
-| 快照 | `GET /v1/baton/conversations/{id}` | Baton；Bearer token；原子返回元数据、分页历史和 `event_cursor`，缓存不是事实源 | 无/错 token `401 invalid_token`；未知 Conversation `404 conversation_not_found` |
+| 快照 | `GET /v1/baton/conversations/{id}` | Baton；Bearer token；原子返回元数据、有上限的初始历史、可选 `active_runs` 和 `event_cursor`，缓存不是事实源 | 无/错 token `401 invalid_token`；未知 Conversation `404 conversation_not_found` |
 | 发送 | `POST /v1/baton/conversations/{id}/messages` | Baton；Bearer token；文本消息必须含 UUID `client_message_id`；相同 id 重试返回原消息，不重复创建 | `401 invalid_token`、`404 conversation_not_found`、`400 invalid_message` |
 | 事件流 | `GET /v1/baton/conversations/{id}/events` | Baton；Bearer token 的 SSE；将 snapshot 的 `event_cursor.id` 放入 `Last-Event-ID` 恢复 | `401 invalid_token`、`404 conversation_not_found`；游标不可恢复时发送 `conversation.resync` |
 | 停止 | `POST /v1/baton/conversations/{id}/runs/{runId}:cancel` | Baton；Bearer token；异步请求取消活动 run；仅 `run.cancelled` 代表终态 | `401 invalid_token`、`404 run_not_found` |
+| 结束对话 | `POST /v1/baton/conversations/{id}:end` | Web 或 Baton；Bearer/现有 Web 会话均须有服务自身 `conversation:close` 权限，且带 `Idempotency-Key` UUID；服务端原子结束共享 Conversation | 无权 `403 conversation_close_forbidden`；未知 `404 conversation_not_found`；同 key 重试 `200` 原结果 |
 | 断开/撤销 | `DELETE /v1/baton/devices/{deviceId}/sessions/{id}` | Baton；Bearer token；撤销该设备会话并立即阻止后续访问 | `401 invalid_token`；未知资源按服务现有错误映射 |
 
 发送响应首创消息时为 `201`，幂等重试为 `200`。快照与 `event_cursor` 必须由同一个事务/锁内读取：`event_cursor` 至少含 `{ "id": "evt_…", "sequence": 487 }`，并表示该快照已包含的最后一个事件位置。iOS 随后以此 `id` 打开 SSE，服务只回放 sequence 更大的已持久化 envelope。没有 `Last-Event-ID` 的新订阅从当前 tail 开始，不得暗中把整段事件历史推送给客户端。
 
-SSE event id 按 Conversation 严格递增，事件至少保留 24 小时；每个持久化事件都使用 `id:`、与 envelope `type` 相同的 `event:` 和 JSON `data:` 标准字段，数据仍包在 Baton envelope 中，不要把 AG-UI 原始事件名直接暴露给 iOS。若 `Last-Event-ID` 未知或超过 retention，**不得从头回放**：仅向该连接发送一个完整的 `conversation.resync` envelope，`data.reason` 为 `cursor_unknown_or_expired`，其 id/sequence 复用当前最新保留游标。它不写入 Conversation event log；客户端必须重新取 snapshot 并以新的 `event_cursor` 继续。
+V1 不提供移动端历史分页。snapshot 的 `messages` 必须以时间正序一次返回完整初始窗口：最多最新 200 条完整消息、且序列化文本总量最多 1 MiB，先达到任一边界即截断旧消息。超限返回 `history_truncated: true`，不得返回半条消息、不得返回 `next_cursor`；旧历史仍由现有 Web 产品负责。snapshot 可省略 `active_runs`，客户端按空数组处理；提供时它必须与 history/cursor 同一事务读取，形状为 `[{"run_id":"run_…","status":"running","message_id":"msg_…"}]`，其中 `message_id` 可省略，且只列非终态 run。iOS 用 `run_id` 在重连后恢复 Stop。
+
+SSE event id 按 Conversation 严格递增，事件至少保留 24 小时；响应固定为 `200 Content-Type: text/event-stream; charset=utf-8` 与 `Cache-Control: no-cache`，并按部署栈关闭代理缓冲。每个持久化事件都以 UTF-8 的 `id:`、与 envelope `type` 相同的 `event:`、JSON `data:` 和空行标准 framing 发送；心跳可用 SSE comment，不得伪装 Baton event。HTTP 失败必须返回 JSON，不能先写半截 SSE。不要把 AG-UI 原始事件名直接暴露给 iOS。
+
+若 `Last-Event-ID` 未知或超过 retention，**不得从头回放**：仅向该连接发送一个完整的 `conversation.resync` envelope，`data.reason` 为 `cursor_unknown_or_expired`，其 id/sequence 复用当前最新保留游标。它不写入 Conversation event log；客户端必须重新取 snapshot 并以新的 `event_cursor` 继续。服务端在每次回放/直播中按连续 `sequence` 发出所有 retained envelope，不能有意跳号。客户端保存最后已接受的 `{id, sequence}`：同一 id 的重复 envelope 可忽略；旧 sequence 对应不同 id、非递增的新 sequence，或 `sequence > previous + 1` 都视为连续性损坏，客户端停止应用流并取新 snapshot。运输断线、格式/MIME 不符与该 gap 走同一 resync 路径。
 
 cancel 的 `202 cancellation_requested` 只代表服务已接受请求；执行器应保证流式 assistant 消息先收到 `message.completed { status: "cancelled" }`，再且仅再一次发送 `run.cancelled`。重复取消同一终态 run 可返回其现有 terminal status，但不能重复发布终态事件。
+
+## 结束 Conversation：事务与权限边界
+
+`POST /v1/baton/conversations/{id}:end` 不是清空 UI，也不是删除历史的快捷方式。它必须走 Java 服务既有的 Conversation 授权：只有拥有 `conversation:close` 的 Web 用户或 Baton device session 可以调用；已认证但权限不足固定返回 `403 conversation_close_forbidden`。请求必须携带 `Idempotency-Key` UUID，并在 Conversation 范围内持久化该 key 与最终结果。
+
+首次成功的事务按同一提交边界完成：标记 Conversation closed；使所有 active device session/token 失效；使所有 created/pending/approved-but-unclaimed pairing 失效；对 active run 设置不可再写入的 fence；追加 **唯一一条** 已持久化的 `conversation.closed` envelope。事务提交后才广播该事件，随后关闭已有 SSE 连接。对外部模型的取消是 best effort，不得阻塞 close：任何在 fence 之后返回的 delta、completed、failed 或新消息都必须丢弃，且 `conversation.closed` 之后绝不可再写入事件。
+
+同一 `Idempotency-Key` 的网络重试返回第一次的 `200` 结果，不重复广播或撤销；为支持这个唯一重试，服务可仅对该已完成的 key 验证原调用者身份，不能把一般已撤销 token 重新激活。其余被撤销 session 的后续请求一律 `401 session_revoked`。若请求在关闭边界前已通过鉴权、但到业务执行时发现已关闭，返回 `410 conversation_closed`。已关闭 Conversation 永不 reset/reopen；用户再次开始时，必须创建新 `conversation_id`，重新建立事件序列和 pairing，绝不复用旧 Conversation 的 id 或 sequence。
+
+`conversation.closed` 是客户端最终状态：Web 和 iOS 都删除本地会话凭据并回到可发起新 pairing 的界面。不要要求客户端等待 `run.cancelled`；关闭事件已覆盖任何 in-flight run。
 
 ## `device_proof` 与 token 安全
 
@@ -99,9 +122,10 @@ cancel 的 `202 cancellation_requested` 只代表服务已接受请求；执行�
 - [ ] claim 重试返回同一 token；pairing 标记 consumed 且不接受第二台设备。
 - [ ] Web 拒绝后 status 返回 rejected，永不返回 token。
 - [ ] 过期 pairing 返回 `410 pairing_expired`。
-- [ ] 快照可读且带原子 `event_cursor`；重复相同 `client_message_id` 不创建重复用户消息（首次 `201`、重试 `200`）。
-- [ ] SSE 能收到标准 `id/event/data` 格式的 `message.created`、`run.started`、`message.delta`、`message.completed`、`run.completed`；使用 snapshot 的 `Last-Event-ID` 只恢复后续事件，未知/过期 cursor 只收到 `conversation.resync` 而非从头重复。
+- [ ] 快照可读且带原子 `event_cursor`；最多返回最新 200 条/1 MiB 的完整消息，超限明确 `history_truncated` 而无分页 cursor；active run 存在时给出可选 `active_runs[{run_id,status,message_id?}]`。重复相同 `client_message_id` 不创建重复用户消息（首次 `201`、重试 `200`）。
+- [ ] SSE 返回 `text/event-stream; charset=utf-8`，能收到标准 `id/event/data` 格式的 `message.created`、`run.started`、`message.delta`、`message.completed`、`run.completed`；使用 snapshot 的 `Last-Event-ID` 只恢复连续后续事件，未知/过期 cursor 只收到 `conversation.resync` 而非从头重复；客户端遇到 sequence gap 会取新 snapshot。
 - [ ] cancel 首次返回已接受，随后按“message cancelled → run.cancelled”获得唯一终态；重复取消不重复发布事件；DELETE 撤销后未来访问被拒绝。
+- [ ] 有 `conversation:close` 权限的 Web 与 Baton 均可 End；无权固定 `403 conversation_close_forbidden`。End 仅广播一条 `conversation.closed`，使所有 token/未决 pairing 失效，丢弃任何晚到的 Agent 输出；同 `Idempotency-Key` 重试不重复结束。下一段会话使用新 Conversation ID 与新事件序列。
 - [ ] AG-UI V1 fixture 映射到上述 Baton 事件；未知 AG-UI 事件只进入诊断，不泄漏到 iOS wire format。
 - [ ] 所有 HTTPS、proof、token、Cookie/CSRF 和日志脱敏检查通过；LM Studio key 不出现在代码、文档、请求或 iOS 包内。
 

@@ -3,12 +3,37 @@ import Combine
 import Security
 import UIKit
 
+/// Presentation state derived exclusively from standard Baton run/message events.
+/// It intentionally exposes activity, not an agent's private reasoning content.
+enum AgentActivity: Equatable {
+    case idle
+    case thinking
+    case responding
+
+    var message: String? {
+        switch self {
+        case .idle: nil
+        case .thinking: "智能体正在思考…"
+        case .responding: "智能体正在回复…"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .idle: ""
+        case .thinking: "sparkles"
+        case .responding: "text.line.first.and.arrowtriangle.forward"
+        }
+    }
+}
+
 @MainActor
 final class BatonViewModel: ObservableObject {
     @Published private(set) var messages: [ConversationMessage] = []
     @Published private(set) var conversation: ConversationDescriptor?
     @Published var composerText = ""
     @Published private(set) var activeRunID: String?
+    @Published private(set) var agentActivity: AgentActivity = .idle
     @Published private(set) var connectionStatus = "尚未连接"
     @Published private(set) var errorMessage: String?
     @Published private(set) var isBusy = false
@@ -30,6 +55,9 @@ final class BatonViewModel: ObservableObject {
     private var shouldMaintainConnection = false
     private var reconnectAttempt = 0
     private var outboxRetryTask: Task<Void, Never>?
+    /// Retained until this End operation reaches a terminal local outcome, so
+    /// an explicit retry after a lost response remains server-idempotent.
+    private var endIdempotencyKey: UUID?
     private let deviceID: String
     private var cancellables = Set<AnyCancellable>()
 
@@ -106,15 +134,18 @@ final class BatonViewModel: ObservableObject {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, let credential else { return }
         let pending = PendingOutboxMessage(text: text, credential: credential)
+        speechInput.discardTranscript()
+        composerText = ""
         Task {
             do {
                 try appendOutbox(pending)
-                composerText = ""; errorMessage = nil
+                errorMessage = nil
                 await deliver(pending, using: credential, attemptsRemaining: 3)
             } catch {
-                // Keep the composer text because persistence itself failed. A request
-                // must never be sent before its idempotency key is durably recorded.
-                composerText = text; errorMessage = error.localizedDescription
+                // The text has already left the composer by explicit user action;
+                // do not let a failed persistence attempt make a sent transcript
+                // reappear as if it were still unsent.
+                errorMessage = "消息未能安全暂存，请重新输入。\n\(error.localizedDescription)"
             }
         }
     }
@@ -124,6 +155,23 @@ final class BatonViewModel: ObservableObject {
         Task {
             do { try await api.cancel(endpoint: credential.conversationEndpoint, token: credential.accessToken, runID: runID) }
             catch { errorMessage = error.localizedDescription }
+        }
+    }
+
+    func endConversation() {
+        guard let credential else { return }
+        let idempotencyKey = endIdempotencyKey ?? UUID()
+        endIdempotencyKey = idempotencyKey
+        Task {
+            do {
+                try await api.endConversation(endpoint: credential.conversationEndpoint, token: credential.accessToken, idempotencyKey: idempotencyKey)
+                closeConversation()
+            } catch {
+                // The server may have ended the conversation but the original
+                // response was lost. Its explicit terminal code is authoritative.
+                if isConversationClosed(error) { closeConversation() }
+                else { errorMessage = error.localizedDescription }
+            }
         }
     }
 
@@ -147,7 +195,9 @@ final class BatonViewModel: ObservableObject {
                 try await api.revoke(endpoint: credential.conversationEndpoint, token: credential.accessToken, deviceID: credential.deviceID, sessionID: credential.sessionID)
                 removeLocalSession()
             } catch {
-                if isInvalidToken(error) {
+                if isConversationClosed(error) {
+                    closeConversation()
+                } else if isInvalidToken(error) {
                     invalidateSession(error)
                 } else {
                     // A local deletion here would falsely report that access was
@@ -177,6 +227,7 @@ final class BatonViewModel: ObservableObject {
         reducer.replaceSnapshot(snapshot)
         messages = reducer.messages
         conversation = ConversationDescriptor(id: snapshot.id, title: snapshot.title, agentName: snapshot.agentName)
+        restoreActiveRun(from: snapshot)
     }
 
     private func startEventStream() {
@@ -198,26 +249,57 @@ final class BatonViewModel: ObservableObject {
 
     private func apply(_ event: BatonEvent) async -> Bool {
         if event.type == "conversation.resync" {
-            do {
-                guard let credential else { return true }
-                connectionStatus = "正在重新同步会话…"
-                try await loadSnapshot(using: credential)
-                startEventStream()
-            } catch { handleSessionFailure(error) }
+            await resynchronize()
+            return true
+        }
+        if event.type == "conversation.closed" {
+            closeConversation()
             return true
         }
         let mustResync = reducer.apply(event)
         messages = reducer.messages
-        if mustResync { return true }
+        if mustResync {
+            await resynchronize()
+            return true
+        }
         switch event.type {
         case "message.created":
             if let message = decodeMessage(event.data), let id = message.clientMessageID { removeOutbox(id) }
-        case "message.failed": errorMessage = event.data.object?["message"]?.string ?? "生成失败。"
-        case "run.started": activeRunID = event.data.object?["run_id"]?.string
-        case "run.completed", "run.cancelled": activeRunID = nil
+        case "message.delta":
+            if activeRunID != nil { agentActivity = .responding }
+        case "message.failed":
+            agentActivity = .idle
+            errorMessage = event.data.object?["message"]?.string ?? "生成失败。"
+        case "run.started":
+            activeRunID = event.data.object?["run_id"]?.string
+            agentActivity = .thinking
+        case "run.completed", "run.cancelled":
+            activeRunID = nil
+            agentActivity = .idle
         default: break
         }
         return false
+    }
+
+    private func resynchronize() async {
+        do {
+            guard let credential else { return }
+            connectionStatus = "正在重新同步会话…"
+            try await loadSnapshot(using: credential)
+            startEventStream()
+        } catch {
+            handleSessionFailure(error)
+        }
+    }
+
+    private func restoreActiveRun(from snapshot: ConversationSnapshot) {
+        guard let run = ActiveRun.current(in: snapshot.activeRuns) else {
+            activeRunID = nil
+            agentActivity = .idle
+            return
+        }
+        activeRunID = run.id
+        agentActivity = .thinking
     }
 
     private func merge(_ message: ConversationMessage) {
@@ -250,6 +332,7 @@ final class BatonViewModel: ObservableObject {
             merge(message)
             removeOutbox(pending.clientMessageID)
         } catch {
+            if isConversationClosed(error) { closeConversation(); return }
             if isInvalidToken(error) { invalidateSession(error); return }
             guard attemptsRemaining > 1, shouldMaintainConnection else {
                 errorMessage = "消息已安全暂存，将在下次连接时以原始请求重试。\n\(error.localizedDescription)"
@@ -277,7 +360,13 @@ final class BatonViewModel: ObservableObject {
         outboxRetryTask?.cancel(); outboxRetryTask = nil
         KeychainStore.delete(); KeychainStore.deleteOutbox()
         credential = nil; conversation = nil; messages = []; reducer = ConversationEventReducer()
-        activeRunID = nil; isConnected = false; isBusy = false; connectionStatus = "尚未连接"; errorMessage = nil
+        activeRunID = nil; agentActivity = .idle; isConnected = false; isBusy = false; connectionStatus = "尚未连接"; errorMessage = nil
+        endIdempotencyKey = nil
+    }
+
+    private func closeConversation() {
+        removeLocalSession()
+        connectionStatus = "对话已结束"
     }
 
     private func invalidateSession(_ error: Error) {
@@ -290,8 +379,13 @@ final class BatonViewModel: ObservableObject {
         (error as? CompanionAPIError)?.invalidatesSessionCredential == true
     }
 
+    private func isConversationClosed(_ error: Error) -> Bool {
+        (error as? CompanionAPIError)?.closesConversation == true
+    }
+
     private func handleSessionFailure(_ error: Error) {
-        if isInvalidToken(error) { invalidateSession(error) }
+        if isConversationClosed(error) { closeConversation() }
+        else if isInvalidToken(error) { invalidateSession(error) }
         else { failConnection(error) }
     }
 
@@ -302,8 +396,10 @@ final class BatonViewModel: ObservableObject {
 
     private func streamEnded(_ error: Error?) async {
         guard shouldMaintainConnection, !Task.isCancelled else { return }
+        if let error, isConversationClosed(error) { closeConversation(); return }
         if let error, isInvalidToken(error) { invalidateSession(error); return }
         guard reconnectAttempt < 5 else {
+            activeRunID = nil; agentActivity = .idle
             isConnected = false; connectionStatus = "连接已中断"; if let error { errorMessage = error.localizedDescription }
             return
         }

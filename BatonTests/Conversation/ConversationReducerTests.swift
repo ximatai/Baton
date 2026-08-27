@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import Baton
 
+@MainActor
 struct ConversationReducerTests {
     private func message(id: String = "msg_1", text: String = "hello") -> ConversationMessage {
         ConversationMessage(id: id, clientMessageID: nil, conversationID: "conv_1", role: .assistant, content: [MessageContent(type: "text", text: text)], createdAt: "2026-08-26T00:00:00Z", status: "streaming")
@@ -40,6 +41,28 @@ struct ConversationReducerTests {
         #expect(required)
         #expect(reducer.messages == [message()])
         #expect(reducer.cursor == EventCursor(id: "evt_10", sequence: 10))
+    }
+
+    @Test func sequenceGapRequiresSnapshotInsteadOfSilentlySkippingAnEvent() {
+        let snapshot = ConversationSnapshot(id: "conv_1", title: "Test", agentName: nil, messages: [message()], eventCursor: EventCursor(id: "evt_10", sequence: 10))
+        var reducer = ConversationEventReducer()
+        reducer.replaceSnapshot(snapshot)
+
+        let required = reducer.apply(BatonEvent(id: "evt_12", sequence: 12, type: "message.delta", data: .object(["message_id": .string("msg_1"), "delta": .string(" lost") ])))
+
+        #expect(required)
+        #expect(reducer.messages == [message()])
+        #expect(reducer.cursor == EventCursor(id: "evt_10", sequence: 10))
+    }
+
+    @Test func snapshotDecodesActiveRunsForReconnectCancellation() throws {
+        let json = """
+        {"id":"conv_1","title":"Test","messages":[],"event_cursor":{"id":"evt_10","sequence":10},"active_runs":[{"run_id":"run_1","status":"active","message_id":"msg_1"}]}
+        """
+        let snapshot = try JSONDecoder().decode(ConversationSnapshot.self, from: Data(json.utf8))
+        #expect(snapshot.activeRuns == [ActiveRun(id: "run_1", status: "active", messageID: "msg_1")])
+        #expect(snapshot.activeRuns[0].isLive)
+        #expect(ActiveRun.current(in: snapshot.activeRuns)?.id == "run_1")
     }
 
     @Test func outboxKeepsClientUUIDAcrossPersistence() throws {
