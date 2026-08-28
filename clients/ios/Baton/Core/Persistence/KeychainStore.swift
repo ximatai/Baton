@@ -3,16 +3,38 @@ import Security
 
 enum KeychainStore {
     private static let service = "net.ximatai.Baton"
-    private static let sessionAccount = "active-companion-session"
+    /// Retained only to migrate V1 installations that stored one active session.
+    private static let legacySessionAccount = "active-companion-session"
+    private static let sessionsAccount = "companion-sessions"
     private static let pendingPairingAccount = "pending-companion-pairing"
     private static let outboxAccount = "pending-conversation-outbox"
 
-    static func save(_ credential: SessionCredential) throws {
-        try save(credential, account: sessionAccount)
+    static func loadSessions() throws -> [StoredConversationSession] {
+        if let sessions = try load([StoredConversationSession].self, account: sessionsAccount) {
+            let normalized = ConversationSessionIndex.deduplicating(sessions)
+            if normalized != sessions { try save(normalized, account: sessionsAccount) }
+            return normalized
+        }
+        guard let legacy = try load(SessionCredential.self, account: legacySessionAccount) else { return [] }
+        let migrated = [StoredConversationSession(credential: legacy)]
+        try save(migrated, account: sessionsAccount)
+        delete(account: legacySessionAccount)
+        return migrated
     }
 
-    static func load() throws -> SessionCredential? {
-        try load(SessionCredential.self, account: sessionAccount)
+    @discardableResult
+    static func upsertSession(_ credential: SessionCredential, activatedAt: Date = .now) throws -> [StoredConversationSession] {
+        let sessions = ConversationSessionIndex.upserting(credential, into: try loadSessions(), at: activatedAt)
+        try save(sessions, account: sessionsAccount)
+        return sessions
+    }
+
+    @discardableResult
+    static func removeConversation(conversationKey: String) throws -> [StoredConversationSession] {
+        let sessions = ConversationSessionIndex.removing(conversationKey: conversationKey, from: try loadSessions())
+        if sessions.isEmpty { delete(account: sessionsAccount) }
+        else { try save(sessions, account: sessionsAccount) }
+        return sessions
     }
 
     static func savePending(_ credential: PendingPairingCredential) throws {
@@ -24,7 +46,6 @@ enum KeychainStore {
     }
 
     static func deletePending() { delete(account: pendingPairingAccount) }
-    static func delete() { delete(account: sessionAccount) }
 
     static func loadOutbox() throws -> [PendingOutboxMessage] {
         try load([PendingOutboxMessage].self, account: outboxAccount) ?? []
@@ -40,12 +61,16 @@ enum KeychainStore {
     private static func save<Value: Encodable>(_ value: Value, account: String) throws {
         let data = try JSONEncoder().encode(value)
         let query = baseQuery(account: account)
-        SecItemDelete(query as CFDictionary)
+        let update = [kSecValueData as String: data]
+        let updateStatus = SecItemUpdate(query as CFDictionary, update as CFDictionary)
+        if updateStatus == errSecSuccess { return }
+        guard updateStatus == errSecItemNotFound else { throw KeychainError.unexpectedStatus(updateStatus) }
+
         var insert = query
         insert[kSecValueData as String] = data
         insert[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let status = SecItemAdd(insert as CFDictionary, nil)
-        guard status == errSecSuccess else { throw KeychainError.unexpectedStatus(status) }
+        let insertStatus = SecItemAdd(insert as CFDictionary, nil)
+        guard insertStatus == errSecSuccess else { throw KeychainError.unexpectedStatus(insertStatus) }
     }
 
     private static func load<Value: Decodable>(_ type: Value.Type, account: String) throws -> Value? {
@@ -69,4 +94,4 @@ enum KeychainStore {
          kSecAttrAccount as String: account]
     }
 }
-enum KeychainError: LocalizedError { case unexpectedStatus(OSStatus); var errorDescription: String? { "无法安全保存本次会话（Keychain 错误）。" } }
+enum KeychainError: LocalizedError { case unexpectedStatus(OSStatus); var errorDescription: String? { String(localized: "无法安全保存本次会话（Keychain 错误）。") } }

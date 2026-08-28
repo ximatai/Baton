@@ -9,13 +9,13 @@ enum CompanionAPIError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidPairingURL: return "Pairing URL 无效。"
-        case .insecureEndpoint: return "服务地址必须是完整的 HTTP 或 HTTPS URL。"
-        case .endpointOriginMismatch: return "服务端端点与 Pairing URL 不属于同一来源。"
-        case .invalidResponse: return "服务端响应格式无效。"
+        case .invalidPairingURL: return String(localized: "Pairing URL 无效。")
+        case .insecureEndpoint: return String(localized: "服务地址必须是完整的 HTTP 或 HTTPS URL。")
+        case .endpointOriginMismatch: return String(localized: "服务端端点与 Pairing URL 不属于同一来源。")
+        case .invalidResponse: return String(localized: "服务端响应格式无效。")
         case .server(let status, let code, let message):
-            if status == 410 || code == "pairing_expired" { return "二维码配对已过期，请重新扫码。" }
-            if code == "invalid_device_proof" { return "此设备无法领取该配对凭据，请重新扫码。" }
+            if status == 410 || code == "pairing_expired" { return String(localized: "二维码配对已过期，请重新扫码。") }
+            if code == "invalid_device_proof" { return String(localized: "此设备无法领取该配对凭据，请重新扫码。") }
             return message
         }
     }
@@ -35,7 +35,7 @@ enum CompanionAPIError: LocalizedError {
     }
 }
 
-struct BatonAPIClient {
+struct BatonAPIClient: Sendable {
     private let session: URLSession
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
@@ -88,8 +88,8 @@ struct BatonAPIClient {
         return status
     }
 
-    func snapshot(endpoint: URL, token: String) async throws -> ConversationSnapshot {
-        try await get(url: endpoint, token: token)
+    func snapshot(endpoint: URL, token: String, timeout: TimeInterval? = nil) async throws -> ConversationSnapshot {
+        try await get(url: endpoint, token: token, timeout: timeout)
     }
 
     func send(endpoint: URL, token: String, text: String, clientMessageID: UUID) async throws -> ConversationMessage {
@@ -172,9 +172,10 @@ struct BatonAPIClient {
         return try decoder.decode(Response.self, from: data)
     }
 
-    private func get<Response: Decodable>(url: URL, token: String? = nil) async throws -> Response {
+    private func get<Response: Decodable>(url: URL, token: String? = nil, timeout: TimeInterval? = nil) async throws -> Response {
         try validateURL(url)
         var request = URLRequest(url: url)
+        if let timeout { request.timeoutInterval = timeout }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token { request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         let (data, response) = try await session.data(for: request)

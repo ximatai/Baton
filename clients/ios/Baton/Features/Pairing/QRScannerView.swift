@@ -107,7 +107,7 @@ struct QRScannerSheet: View {
         VStack(spacing: 16) {
             Image(systemName: "camera.viewfinder").font(.system(size: 42)).foregroundStyle(.tint)
             Text("需要相机权限").font(.title3.bold())
-            Text("Baton 只使用相机读取网页展示的配对二维码。扫码不会自动授权加入会话。")
+            Text("Baton 不会自行授予访问权限；是否需要网页确认由服务端决定。")
                 .multilineTextAlignment(.center).foregroundStyle(.secondary)
             if isRequestingPermission { ProgressView("正在请求权限…") }
         }

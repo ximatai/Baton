@@ -31,10 +31,10 @@ final class SpeechInputService: ObservableObject {
 
         var message: String? {
             switch self {
-            case .preparing: "正在准备本地听写…"
-            case .downloadingModel: "正在下载本地语音模型…"
-            case .recording: "正在听写，松开即可转写（音频不会离开此设备）"
-            case .finishing: "正在完成转写…"
+            case .preparing: String(localized: "正在准备本地听写…")
+            case .downloadingModel: String(localized: "正在下载本地语音模型…")
+            case .recording: String(localized: "正在听写，松开即可转写（音频不会离开此设备）")
+            case .finishing: String(localized: "正在完成转写…")
             case .unavailable(let message), .failed(let message): message
             case .idle: nil
             }
@@ -120,11 +120,11 @@ final class SpeechInputService: ObservableObject {
     private func start(sessionID: UUID) async {
         do {
             guard await requestPermissions(), isCurrent(sessionID) else {
-                if isCurrent(sessionID) { state = .unavailable("需要允许麦克风和语音识别权限，才能使用本地听写。") }
+                if isCurrent(sessionID) { state = .unavailable(String(localized: "需要允许麦克风和语音识别权限，才能使用本地听写。")) }
                 return
             }
             guard SpeechTranscriber.isAvailable else {
-                state = .unavailable("此设备当前不支持本地语音转文字。")
+                state = .unavailable(String(localized: "此设备当前不支持本地语音转文字。"))
                 return
             }
 
@@ -132,7 +132,9 @@ final class SpeechInputService: ObservableObject {
             guard let locale = await SpeechTranscriptionLocaleResolver.resolveSupportedLocale(
                 requested: requestedLocale
             ) else {
-                state = .unavailable("当前语言（\(requestedLocale.identifier)）没有可用的本地语音模型。")
+                state = .unavailable(
+                    String(format: String(localized: "当前语言（%@）没有可用的本地语音模型。"), locale: .current, requestedLocale.identifier)
+                )
                 return
             }
             guard isCurrent(sessionID) else { return }
@@ -155,12 +157,12 @@ final class SpeechInputService: ObservableObject {
                 compatibleWith: modules,
                 considering: naturalFormat
             ) else {
-                state = .unavailable("此麦克风的音频格式不支持本地语音转文字。")
+                state = .unavailable(String(localized: "此麦克风的音频格式不支持本地语音转文字。"))
                 await tearDown()
                 return
             }
             guard let converter = AVAudioConverter(from: naturalFormat, to: audioFormat) else {
-                state = .unavailable("无法将此麦克风的音频转换为本地听写格式。")
+                state = .unavailable(String(localized: "无法将此麦克风的音频转换为本地听写格式。"))
                 await tearDown()
                 return
             }
@@ -424,7 +426,7 @@ private enum SpeechInputError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .modelUnavailable: "当前语言的本地语音模型不可用或下载失败。"
+        case .modelUnavailable: String(localized: "当前语言的本地语音模型不可用或下载失败。")
         }
     }
 }

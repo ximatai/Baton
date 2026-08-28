@@ -201,10 +201,11 @@
 				};
 			};
 			buildConfigurationList = 83435A12303ECDC30037440E /* Build configuration list for PBXProject "Baton" */;
-			developmentRegion = en;
+			developmentRegion = "zh-Hans";
 			hasScannedForEncodings = 0;
 			knownRegions = (
 				en,
+				"zh-Hans",
 				Base,
 			);
 			mainGroup = 83435A0E303ECDC30037440E;

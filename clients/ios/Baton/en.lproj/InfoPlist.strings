@@ -1,0 +1,3 @@
+"NSCameraUsageDescription" = "Baton uses the camera to scan a pairing QR code displayed on a web page so it can request to join the current Agent conversation.";
+"NSMicrophoneUsageDescription" = "Baton uses the microphone to turn your voice into editable chat text on this device.";
+"NSSpeechRecognitionUsageDescription" = "Baton uses on-device speech recognition to turn your voice into editable chat text.";
