@@ -533,9 +533,14 @@ final class BatonViewModel: ObservableObject {
             .replacingOccurrences(of: "=", with: "")
     }
 
-    func toggleVoiceInput() {
-        if voiceState.isWorking { speechInput.stop() }
-        else { speechInput.start(initialText: composerText) }
+    func beginVoiceInput() {
+        guard !voiceState.isWorking else { return }
+        speechInput.start(initialText: composerText)
+    }
+
+    func endVoiceInput() {
+        guard voiceState.isWorking else { return }
+        speechInput.stop()
     }
 
     func dismissVoiceIssue() { speechInput.dismissIssue() }

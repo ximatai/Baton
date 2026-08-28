@@ -71,19 +71,19 @@ struct QRScannerSheet: View {
                 case .denied:
                     guidance(
                         title: "未获得相机权限",
-                        message: "请在“设置 > Baton > 相机”中允许访问后重试；也可以返回后粘贴 Pairing URL。",
+                        message: "请在“设置 > Baton > 相机”中允许访问后重试。",
                         actionTitle: "打开设置",
                         action: openSettings
                     )
                 case .restricted:
                     guidance(
                         title: "相机访问受限",
-                        message: "此设备的相机访问被系统或屏幕使用时间限制。你仍可返回后粘贴 Pairing URL。"
+                        message: "此设备的相机访问被系统或屏幕使用时间限制。请在系统设置中允许相机后重试。"
                     )
                 case .unsupported:
                     guidance(
                         title: "当前环境不能扫码",
-                        message: "模拟器或无相机设备不能扫描二维码。请返回后粘贴 Pairing URL，或在真机上继续。"
+                        message: "模拟器或无相机设备不能扫描二维码。请在真机上继续。"
                     )
                 }
             }

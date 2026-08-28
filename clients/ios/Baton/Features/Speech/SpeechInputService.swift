@@ -33,7 +33,7 @@ final class SpeechInputService: ObservableObject {
             switch self {
             case .preparing: "正在准备本地听写…"
             case .downloadingModel: "正在下载本地语音模型…"
-            case .recording: "正在听写（音频不会离开此设备）"
+            case .recording: "正在听写，松开即可转写（音频不会离开此设备）"
             case .finishing: "正在完成转写…"
             case .unavailable(let message), .failed(let message): message
             case .idle: nil

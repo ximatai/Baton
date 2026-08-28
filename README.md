@@ -117,6 +117,7 @@ Baton 将这两种设备各自擅长的部分组合起来：
 | 实现任意服务端或客户端的协议互通 | [BATON_SPEC.md](BATON_SPEC.md) |
 | 将 Baton 接入现有 Java Web/Agent 服务 | [JAVA_INTEGRATION.md](JAVA_INTEGRATION.md) |
 | 在本地体验或调试 fixture | [mock_server/README.md](mock_server/README.md) |
+| 了解各客户端的仓库边界 | [clients/README.md](clients/README.md) |
 
 ## 快速体验
 
@@ -126,9 +127,9 @@ Baton 将这两种设备各自擅长的部分组合起来：
 python3 mock_server/mock_server.py
 ```
 
-然后在浏览器打开 [http://127.0.0.1:8787/](http://127.0.0.1:8787/)。页面可生成二维码、确认手机并作为另一端聊天客户端。iOS Simulator 可直接连接；真机局域网体验、可选 OpenAI-compatible 模型回复和 fixture 细节见 [mock_server/README.md](mock_server/README.md)。
+然后在浏览器打开 [http://127.0.0.1:8787/](http://127.0.0.1:8787/)。页面可生成二维码、确认手机并作为另一端聊天客户端。真机局域网体验、Simulator 的 Debug 演示连接、可选 OpenAI-compatible 模型回复和 fixture 细节见 [mock_server/README.md](mock_server/README.md)。
 
-用 Xcode 打开 `Baton.xcodeproj` 后，即可在 Simulator 或已配置的真机运行。Baton 跟随接入服务的 HTTP 或 HTTPS origin；HTTP 会在 App 内持续标记为“未加密”，适合服务方认可风险的内网或遗留部署。HTTPS 仍是面向互联网或不受控网络的强烈建议，而不是接入 Baton 的前置改造条件。
+用 Xcode 打开 `clients/ios/Baton.xcodeproj` 后，即可在 Simulator 或已配置的真机运行。扫码需要真机相机；Simulator 的 Debug 版本保留了本地演示连接入口。Baton 跟随接入服务的 HTTP 或 HTTPS origin；HTTP 会在 App 内持续标记为“未加密”，适合服务方认可风险的内网或遗留部署。HTTPS 仍是面向互联网或不受控网络的强烈建议，而不是接入 Baton 的前置改造条件。
 
 ## 安全原则
 

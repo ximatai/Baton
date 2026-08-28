@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ConversationView: View {
     @ObservedObject var model: BatonViewModel
+    @FocusState private var isComposerFocused: Bool
+
     var body: some View {
         VStack(spacing: 0) {
             ConnectionBanner(
@@ -40,24 +42,40 @@ struct ConversationView: View {
                         if !model.voiceState.isWorking { Spacer(); Button("知道了") { model.dismissVoiceIssue() }.font(.footnote.bold()) }
                     }.padding(.horizontal, 4)
                 }
-                HStack(alignment: .bottom, spacing: 10) {
-                    TextField("输入消息", text: $model.composerText, axis: .vertical)
-                        .lineLimit(1...5)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
+                HStack(alignment: .center, spacing: 10) {
+                    HStack(alignment: .center, spacing: 8) {
+                        TextField("输入消息", text: $model.composerText, axis: .vertical)
+                            .lineLimit(1...5)
+                            .focused($isComposerFocused)
+                            .submitLabel(.send)
+                            .onSubmit { model.send() }
+                        Image(systemName: model.voiceState.isRecording ? "waveform" : "mic")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(model.voiceState.isRecording ? .red : Color.accentColor)
+                            .frame(width: 28, height: 28)
+                            .accessibilityHidden(true)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                         .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.primary.opacity(0.12)) }
-                        .submitLabel(.send)
-                        .onSubmit { model.send() }
-                    Button { model.toggleVoiceInput() } label: {
-                        Image(systemName: model.voiceState.isRecording ? "stop.fill" : "mic.fill")
-                            .font(.body.weight(.semibold))
-                            .frame(width: 42, height: 42)
+                    .onLongPressGesture(
+                        minimumDuration: 0.35,
+                        maximumDistance: 32,
+                        perform: beginVoiceInput,
+                        onPressingChanged: { isPressing in
+                            if !isPressing { model.endVoiceInput() }
+                        }
+                    )
+                    .accessibilityHint("长按开始本地语音输入，松开后可编辑转写结果")
+                    .accessibilityAction(named: model.voiceState.isWorking ? "结束语音输入" : "开始语音输入") {
+                        if model.voiceState.isWorking {
+                            model.endVoiceInput()
+                        } else {
+                            beginVoiceInput()
+                        }
                     }
-                    .buttonStyle(.bordered)
-                    .tint(model.voiceState.isRecording ? .red : .accentColor)
-                        .disabled(model.voiceState.isWorking && !model.voiceState.isRecording)
-                        .accessibilityLabel(model.voiceState.isRecording ? "停止语音输入" : "开始语音输入")
                     if let runID = model.activeRunID {
                         Button { model.cancel(runID: runID) } label: { Image(systemName: "stop.fill").frame(width: 22, height: 22) }
                             .buttonStyle(.bordered)
@@ -78,5 +96,10 @@ struct ConversationView: View {
             .frame(maxWidth: .infinity)
             .background(.bar)
         }
+    }
+
+    private func beginVoiceInput() {
+        isComposerFocused = false
+        model.beginVoiceInput()
     }
 }

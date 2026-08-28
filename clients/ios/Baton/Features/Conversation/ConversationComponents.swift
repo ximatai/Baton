@@ -2,6 +2,8 @@ import SwiftUI
 
 struct MessageBubble: View {
     let message: ConversationMessage
+    private let contentPadding: CGFloat = 10
+
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             if message.role == .assistant {
@@ -12,7 +14,7 @@ struct MessageBubble: View {
                     .background(Color.accentColor.opacity(0.12), in: Circle())
                     .accessibilityHidden(true)
                 MarkdownMessageView(source: message.text.isEmpty && message.status == "streaming" ? "正在思考…" : message.text)
-                    .padding(13)
+                    .padding(contentPadding)
                     .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.primary.opacity(0.07)) }
                 Spacer(minLength: 48)
@@ -20,7 +22,7 @@ struct MessageBubble: View {
                 Spacer(minLength: 48)
                 Text(message.text)
                     .textSelection(.enabled)
-                    .padding(13)
+                    .padding(contentPadding)
                     .foregroundStyle(.white)
                     .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             }

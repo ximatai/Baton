@@ -12,8 +12,11 @@
 ## 代码结构
 
 ```text
-App → Features → Core → Apple frameworks / URLSession / Keychain
+clients/ios/Baton: App → Features → Core → Apple frameworks / URLSession / Keychain
 ```
+
+- `clients/ios` 是当前唯一已实现的客户端；Android 与鸿蒙目录只保留跨端接入边界，不得复制 iOS 实现或创建未使用的共享层。
+- 所有客户端共同遵循根目录的 `BATON_SPEC.md`；mock fixture 仍在根目录 `mock_server/`，与任一移动端无关。
 
 - `Core/Protocol` 是唯一网络信任边界；只在此处处理 HTTP(S)、同源、Bearer 和 SSE。
 - `Core/Conversation` 是纯 reducer；不得依赖 SwiftUI、Keychain 或网络。
