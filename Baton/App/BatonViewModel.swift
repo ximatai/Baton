@@ -396,7 +396,9 @@ final class BatonViewModel: ObservableObject {
     }
 
     private func decodeMessage(_ value: JSONValue) -> ConversationMessage? {
-        guard JSONSerialization.isValidJSONObject(value.foundationValue), let data = try? JSONSerialization.data(withJSONObject: value.foundationValue) else { return nil }
+        guard let message = value.object?["message"],
+              JSONSerialization.isValidJSONObject(message.foundationValue),
+              let data = try? JSONSerialization.data(withJSONObject: message.foundationValue) else { return nil }
         return try? JSONDecoder().decode(ConversationMessage.self, from: data)
     }
 

@@ -33,6 +33,30 @@ struct ConversationReducerTests {
         #expect(reducer.cursor == EventCursor(id: "evt_11", sequence: 11))
     }
 
+    @Test func createdMessageIsReadFromEventMessageEnvelope() {
+        let created = BatonEvent(
+            id: "evt_11",
+            sequence: 11,
+            type: "message.created",
+            data: .object(["message": .object([
+                "id": .string("msg_user_1"),
+                "client_message_id": .string("11111111-2222-3333-4444-555555555555"),
+                "conversation_id": .string("conv_1"),
+                "role": .string("user"),
+                "content": .array([.object(["type": .string("text"), "text": .string("from web")])]),
+                "created_at": .string("2026-08-26T00:00:01Z"),
+                "status": .string("completed")
+            ])])
+        )
+        var reducer = ConversationEventReducer()
+        reducer.replaceSnapshot(ConversationSnapshot(id: "conv_1", title: "Test", agentName: nil, messages: [], eventCursor: EventCursor(id: "evt_10", sequence: 10)))
+
+        let mustResynchronize = reducer.apply(created)
+        #expect(!mustResynchronize)
+        #expect(reducer.messages.map(\.text) == ["from web"])
+        #expect(reducer.messages.first?.role == .user)
+    }
+
     @Test func resyncRequestsFreshSnapshotWithoutMutatingTimeline() {
         let snapshot = ConversationSnapshot(id: "conv_1", title: "Test", agentName: nil, messages: [message()], eventCursor: EventCursor(id: "evt_10", sequence: 10))
         var reducer = ConversationEventReducer()

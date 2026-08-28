@@ -66,7 +66,11 @@ struct ConversationEventReducer: Equatable {
     }
 
     private func decodeMessage(_ value: JSONValue) -> ConversationMessage? {
-        guard JSONSerialization.isValidJSONObject(value.foundationValue), let data = try? JSONSerialization.data(withJSONObject: value.foundationValue) else { return nil }
+        // A Baton message.created event wraps its protocol message in data.message.
+        // Decoding the outer event payload silently drops real-time user messages.
+        guard let message = value.object?["message"],
+              JSONSerialization.isValidJSONObject(message.foundationValue),
+              let data = try? JSONSerialization.data(withJSONObject: message.foundationValue) else { return nil }
         return try? JSONDecoder().decode(ConversationMessage.self, from: data)
     }
 }
