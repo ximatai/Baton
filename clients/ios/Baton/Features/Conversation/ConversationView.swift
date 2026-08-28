@@ -9,6 +9,7 @@ struct ConversationView: View {
             ConnectionBanner(
                 status: model.connectionStatus,
                 isConnected: model.isConnected,
+                canReconnect: !model.isConversationReadOnly,
                 isUnencryptedTransport: model.isUnencryptedTransport,
                 reconnect: model.reconnect
             )
@@ -27,7 +28,13 @@ struct ConversationView: View {
                 .background(Color(uiColor: .systemGroupedBackground))
                 .onChange(of: model.messages) { _, messages in if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) } }
             }
-            if let error = model.errorMessage { ErrorNotice(text: error, retry: model.reconnect) }
+            if let error = model.errorMessage {
+                if model.isConversationReadOnly {
+                    ErrorNotice(text: error, retry: nil)
+                } else {
+                    ErrorNotice(text: error, retry: { model.reconnect() })
+                }
+            }
             Divider().opacity(0.6)
             VStack(alignment: .leading, spacing: 6) {
                 if let message = model.agentActivity.message {
@@ -76,6 +83,7 @@ struct ConversationView: View {
                             beginVoiceInput()
                         }
                     }
+                    .disabled(model.isComposerDisabled)
                     if let runID = model.activeRunID {
                         Button { model.cancel(runID: runID) } label: { Image(systemName: "stop.fill").frame(width: 22, height: 22) }
                             .buttonStyle(.bordered)
