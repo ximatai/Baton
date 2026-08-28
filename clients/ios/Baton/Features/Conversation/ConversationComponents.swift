@@ -74,6 +74,8 @@ struct ConnectionBanner: View {
     let canReconnect: Bool
     let isUnencryptedTransport: Bool
     let reconnect: () -> Void
+    @State private var isShowingUnencryptedInfo = false
+
     var body: some View {
         HStack(spacing: 8) {
             Circle()
@@ -83,10 +85,29 @@ struct ConnectionBanner: View {
             Text(status).font(.footnote).lineLimit(1)
             Spacer()
             if isUnencryptedTransport {
-                Label("未加密", systemImage: "exclamationmark.shield.fill")
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(.orange)
-                    .accessibilityLabel("当前服务使用未加密 HTTP 连接")
+                Button { isShowingUnencryptedInfo = true } label: {
+                    Label("未加密", systemImage: "exclamationmark.shield.fill")
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.orange)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("当前服务使用未加密 HTTP 连接")
+                .accessibilityHint("点按查看连接风险说明")
+                .popover(isPresented: $isShowingUnencryptedInfo, arrowEdge: .top) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("未加密连接", systemImage: "exclamationmark.shield.fill")
+                            .font(.headline)
+                            .foregroundStyle(.orange)
+                        Text("当前服务通过 HTTP 传输对话内容。在不可信网络中，内容可能被他人读取或篡改。")
+                        Text("请仅在可信网络中继续，或让服务提供方启用 HTTPS。")
+                            .foregroundStyle(.secondary)
+                    }
+                    .font(.subheadline)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(width: 280, alignment: .leading)
+                    .padding(16)
+                    .presentationCompactAdaptation(.popover)
+                }
             }
             if !isConnected, canReconnect { Button("重连", action: reconnect).font(.footnote.bold()) }
         }

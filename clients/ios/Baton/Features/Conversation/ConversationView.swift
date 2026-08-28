@@ -58,7 +58,11 @@ struct ConversationView: View {
                             .onSubmit { model.send() }
                         Image(systemName: model.voiceState.isRecording ? "waveform" : "mic")
                             .font(.body.weight(.semibold))
-                            .foregroundStyle(model.voiceState.isRecording ? .red : Color.accentColor)
+                            .foregroundStyle(
+                                model.isConversationReadOnly
+                                    ? Color.secondary
+                                    : (model.voiceState.isRecording ? .red : Color.accentColor)
+                            )
                             .frame(width: 28, height: 28)
                             .accessibilityHidden(true)
                     }
