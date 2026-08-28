@@ -8,15 +8,19 @@ struct PairingWaitView: View {
             HStack(spacing: 10) {
                 ProgressView().controlSize(.regular).tint(.accentColor)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("等待网页确认").font(.headline)
+                    Text(model.isAutoApprovedPairing ? "正在自动接入" : "等待网页确认").font(.headline)
                     Text(model.pendingServiceName ?? "正在连接服务").font(.subheadline).foregroundStyle(.secondary)
                 }
             }
             if let title = model.pendingConversationTitle {
                 Label(title, systemImage: "bubble.left.and.bubble.right").font(.footnote).foregroundStyle(.secondary)
             }
-            Text("请在浏览器中确认这台设备的加入请求。确认前不会保存会话凭据。").font(.footnote).foregroundStyle(.secondary)
-            if let approvalURL = model.pendingApprovalURL {
+            Text(model.isAutoApprovedPairing
+                 ? "此服务已为当前二维码开启自动批准。会话凭据仍只会在服务端签发后保存。"
+                 : "请在浏览器中确认这台设备的加入请求。确认前不会保存会话凭据。")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            if !model.isAutoApprovedPairing, let approvalURL = model.pendingApprovalURL {
                 Link(destination: approvalURL) {
                     Label("打开网页确认页", systemImage: "safari").frame(maxWidth: .infinity)
                 }

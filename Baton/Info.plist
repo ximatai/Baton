@@ -8,5 +8,13 @@
 	<string>Baton 使用相机扫描网页展示的 Pairing 二维码，以请求加入当前 Agent 对话。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Baton 使用系统的本地语音识别将语音转成可编辑的聊天文字。</string>
+	<!-- Services select HTTP or HTTPS. Core protocol validation restricts URLs to
+	 absolute, same-origin HTTP(S) endpoints and the conversation UI persistently
+	 marks HTTP as unencrypted. -->
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

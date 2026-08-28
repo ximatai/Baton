@@ -42,6 +42,7 @@ final class BatonViewModel: ObservableObject {
     @Published private(set) var pendingServiceName: String?
     @Published private(set) var pendingConversationTitle: String?
     @Published private(set) var pendingApprovalURL: URL?
+    @Published private(set) var pendingApprovalMode: PairingApprovalMode?
     @Published private(set) var voiceState: SpeechInputService.State = .idle
 
     private let api = BatonAPIClient()
@@ -62,6 +63,11 @@ final class BatonViewModel: ObservableObject {
     private var cancellables = Set<AnyCancellable>()
 
     var canSend: Bool { credential != nil && !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isBusy }
+    var isUnencryptedTransport: Bool {
+        guard let endpoint = credential?.conversationEndpoint else { return false }
+        return !BatonTransportPolicy.isEncrypted(endpoint)
+    }
+    var isAutoApprovedPairing: Bool { pendingApprovalMode == .auto }
 
     init() {
         let key = "baton.device-id"
@@ -125,7 +131,7 @@ final class BatonViewModel: ObservableObject {
         pairingPollTask?.cancel(); pairingPollTask = nil
         pendingPairing = nil; KeychainStore.deletePending()
         isWaitingForApproval = false; isBusy = false; isConnected = false
-        pendingServiceName = nil; pendingConversationTitle = nil; pendingApprovalURL = nil
+        pendingServiceName = nil; pendingConversationTitle = nil; pendingApprovalURL = nil; pendingApprovalMode = nil
         lastPairingURL = nil
         connectionStatus = "已取消等待网页确认"; errorMessage = nil
     }
@@ -421,8 +427,9 @@ final class BatonViewModel: ObservableObject {
         pendingServiceName = pending.document.service.name
         pendingConversationTitle = pending.document.conversation.title
         pendingApprovalURL = pending.document.endpoints.approval
+        pendingApprovalMode = pending.document.approvalMode
         errorMessage = nil
-        connectionStatus = "等待网页确认 \(pending.document.service.name) 的设备请求…"
+        connectionStatus = pairingWaitStatus(for: pending.document)
         pairingPollTask = Task { [weak self, api] in
             await self?.pollUntilPairingResolved(pending, api: api)
         }
@@ -435,7 +442,7 @@ final class BatonViewModel: ObservableObject {
                 switch status.status {
                 case "pending":
                     let seconds = min(max(status.retryAfterSeconds ?? pending.request.retryAfterSeconds, 1), 10)
-                    connectionStatus = "等待网页确认 \(pending.document.service.name) 的设备请求…"
+                    connectionStatus = pairingWaitStatus(for: pending.document)
                     try await Task.sleep(for: .seconds(seconds))
                 case "approved":
                     guard let token = status.accessToken,
@@ -458,7 +465,7 @@ final class BatonViewModel: ObservableObject {
                     try KeychainStore.save(newCredential)
                     KeychainStore.deletePending()
                     pendingPairing = nil; isWaitingForApproval = false
-                    pendingServiceName = nil; pendingConversationTitle = nil; pendingApprovalURL = nil
+                    pendingServiceName = nil; pendingConversationTitle = nil; pendingApprovalURL = nil; pendingApprovalMode = nil
                     credential = newCredential; conversation = issuedConversation
                     shouldMaintainConnection = true; reducer = ConversationEventReducer(); errorMessage = nil
                     try await loadSnapshot(using: newCredential)
@@ -493,7 +500,7 @@ final class BatonViewModel: ObservableObject {
         pairingPollTask?.cancel(); pairingPollTask = nil
         pendingPairing = nil; KeychainStore.deletePending()
         isWaitingForApproval = false; isBusy = false; isConnected = false
-        pendingServiceName = nil; pendingConversationTitle = nil; pendingApprovalURL = nil
+        pendingServiceName = nil; pendingConversationTitle = nil; pendingApprovalURL = nil; pendingApprovalMode = nil
         lastPairingURL = nil
         connectionStatus = status; errorMessage = status
     }
@@ -501,6 +508,13 @@ final class BatonViewModel: ObservableObject {
     private func isTerminalPairingError(_ error: Error) -> Bool {
         guard case let CompanionAPIError.server(status, code, _) = error else { return false }
         return status == 410 || code == "pairing_expired" || code == "invalid_device_proof" || code == "request_not_found"
+    }
+
+    private func pairingWaitStatus(for document: PairingDocument) -> String {
+        switch document.approvalMode {
+        case .manual: "等待网页确认 \(document.service.name) 的设备请求…"
+        case .auto: "\(document.service.name) 正在自动接入此设备…"
+        }
     }
 
     private func makeDeviceProof() throws -> String {

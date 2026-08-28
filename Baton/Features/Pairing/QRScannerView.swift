@@ -1,7 +1,7 @@
 import SwiftUI
 @preconcurrency import AVFoundation
 
-/// Parses only the transport-independent QR payload. HTTPS and same-origin
+/// Parses only the transport-independent QR payload. HTTP(S) transport and same-origin
 /// validation deliberately remain in `BatonAPIClient`, the single network trust
 /// boundary for both pasted and scanned URLs.
 enum BatonPairingURLParser {

@@ -282,15 +282,19 @@ class Handler(BaseHTTPRequestHandler):
         ttl = body.get("mock_ttl_seconds", 60)
         if not isinstance(ttl, (int, float)) or isinstance(ttl, bool) or not 0 <= ttl <= 60:
             return self.error(400, "invalid_mock_ttl", "mock_ttl_seconds must be between 0 and 60.")
+        approval_mode = body.get("approval_mode", "manual")
+        if approval_mode not in ("manual", "auto"):
+            return self.error(400, "invalid_approval_mode", "approval_mode must be manual or auto.")
         with STORE.lock:
             if STORE.conversation_closed: STORE.reset_conversation()
         pairing_id, expires_at = "ps_" + secrets.token_urlsafe(32), time.time() + ttl
         with STORE.lock:
             STORE.pairings[pairing_id] = {"expires_at": expires_at, "status": "created", "request": None,
-                                          "conversation_id": STORE.conversation_id}
+                                          "conversation_id": STORE.conversation_id, "approval_mode": approval_mode}
         return self.send_json({"pairing_id": pairing_id,
             "qr_url": f"{STORE.base_url}/.well-known/baton/pair/{pairing_id}",
             "approval_url": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/approval",
+            "approval_mode": approval_mode,
             "expires_at": datetime.fromtimestamp(expires_at, timezone.utc).isoformat().replace("+00:00", "Z")})
 
     def join_pairing(self, pairing_id, body):
@@ -308,8 +312,8 @@ class Handler(BaseHTTPRequestHandler):
             pairing["request"] = {"id": request_id, "device_id": device_id,
                                   "device_name": device_name[:120], "device_proof": device_proof,
                                   "access_token": None}
-            pairing["status"] = "pending"
-        return self.send_json({"pairing_id": pairing_id, "request_id": request_id, "status": "pending",
+            pairing["status"] = "approved" if pairing["approval_mode"] == "auto" else "pending"
+        return self.send_json({"pairing_id": pairing_id, "request_id": request_id, "status": pairing["status"],
             "poll_url": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/requests/{request_id}",
             "retry_after_seconds": 2}, 202)
 
@@ -349,6 +353,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.error(409, "pairing_not_available", "Pairing is not available.")
             # Mark the invitation consumed on first successful claim, but return the
             # exact same token for retried claims made by the proving device until expiry.
+            if pairing["status"] == "approved" and request["access_token"] is None:
+                token, session_id = STORE.new_token(request["device_id"], pairing["conversation_id"])
+                request["access_token"] = token
+                request["session_id"] = session_id
             pairing["status"] = "consumed"
             token = request["access_token"]
         return self.send_json({"pairing_id": pairing_id, "request_id": request_id, "status": "approved", "pairing_status": "consumed",
@@ -627,6 +635,7 @@ create();
                 "expires_at": datetime.fromtimestamp(pairing["expires_at"], timezone.utc).isoformat().replace("+00:00", "Z"),
                 "service": {"id": "local-mock", "name": "Local Baton Mock"},
                 "conversation": {"id": pairing["conversation_id"], "title": "Local test conversation", "agent_name": "Mock Agent"},
+                "approval_mode": pairing["approval_mode"],
                 "endpoints": {"join": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/requests",
                               "approval": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/approval",
                               "conversation": f"{STORE.base_url}/v1/baton/conversations/{STORE.conversation_id}"},

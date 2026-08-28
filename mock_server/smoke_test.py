@@ -7,6 +7,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from urllib.parse import urlparse
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8787"
 CONVERSATION_ID = None
@@ -78,6 +79,9 @@ proof = "proof_" + uuid.uuid4().hex + uuid.uuid4().hex
 status, joined = request("/v1/baton/pairings/" + pairing_id + "/requests", "POST",
                          {"device_id": "smoke", "device_name": "Smoke iPhone", "device_proof": proof})
 assert status == 202 and joined["status"] == "pending"
+poll = urlparse(joined["poll_url"])
+base = urlparse(BASE)
+assert poll.scheme and poll.netloc and (poll.scheme, poll.netloc) == (base.scheme, base.netloc)
 status, duplicate_join = request("/v1/baton/pairings/" + pairing_id + "/requests", "POST",
                                  {"device_id": "second-device", "device_proof": proof})
 assert status == 409 and duplicate_join["error"]["code"] == "pairing_not_available"
@@ -96,6 +100,23 @@ token = credential["access_token"]
 session_id = credential["session_id"]
 status, replayed_claim = request("/v1/baton/pairings/" + pairing_id + "/requests/" + joined["request_id"], extra_headers={"X-Baton-Device-Proof": proof})
 assert status == 200 and replayed_claim["access_token"] == token and replayed_claim["pairing_status"] == "consumed"
+
+# Auto approval remains a server-side policy: discovery informs the App, but
+# only the first proof-bound join is atomically approved and claim still needs
+# that proof. The Join response never carries a credential.
+auto_pair = create_pairing({"approval_mode": "auto"})
+status, auto_discovery = request("/.well-known/baton/pair/" + auto_pair["pairing_id"])
+assert status == 200 and auto_pair["approval_mode"] == "auto" and auto_discovery["approval_mode"] == "auto"
+auto_proof = "proof_" + uuid.uuid4().hex + uuid.uuid4().hex
+status, auto_join = request("/v1/baton/pairings/" + auto_pair["pairing_id"] + "/requests", "POST",
+                            {"device_id": "auto-smoke", "device_name": "Auto Smoke iPhone", "device_proof": auto_proof})
+assert status == 202 and auto_join["status"] == "approved" and "access_token" not in auto_join
+status, auto_forbidden = request("/v1/baton/pairings/" + auto_pair["pairing_id"] + "/requests/" + auto_join["request_id"],
+                                 extra_headers={"X-Baton-Device-Proof": "wrong-proof"})
+assert status == 403 and auto_forbidden["error"]["code"] == "invalid_device_proof"
+status, auto_credential = request("/v1/baton/pairings/" + auto_pair["pairing_id"] + "/requests/" + auto_join["request_id"],
+                                  extra_headers={"X-Baton-Device-Proof": auto_proof})
+assert status == 200 and auto_credential["status"] == "approved" and auto_credential["access_token"]
 
 # The granted token can now use the normal conversation API and retains send idempotency.
 status, snapshot = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=token)

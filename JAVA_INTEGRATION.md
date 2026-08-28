@@ -28,18 +28,19 @@ Discovery document 内的 `capabilities` 只是服务端对当前 Conversation
 生产 Java 服务应按以下状态机实现：
 
 ```text
-created -- device joins --> pending -- web allows --> approved -- first claim --> consumed
-   |                           |              \\ web denies --> rejected
-   +---------------------------+---------------------- expires --> expired
+manual: created -- device joins --> pending -- web allows --> approved -- first claim --> consumed
+                                  |              \\ web denies --> rejected
+auto:   created -- device joins -----------------> approved -- first claim --> consumed
+   +---------------------------------------------- expires --> expired
 ```
 
-1. 已认证的 Web 页面调用 `POST /v1/baton/pairings`，将 pairing 绑定到当前用户、浏览器会话和选定 Conversation。生成至少 256 bit 的高熵 `pairing_id`，有效期不超过 60 秒，并返回 QR URL、approval URL 和过期时间。
-2. QR 只包含同源 HTTPS discovery URL；不得放 bearer token、Conversation 历史或永久凭据。V1 要求 discovery 中的 endpoint 与 QR origin 同源。
-3. iOS 读取 discovery 后调用 join，提交 `device_id`、展示名和仅本地持有的 `device_proof`。服务只接受一个设备请求，状态转为 `pending`。
-4. Java Web 在已有登录会话下展示设备名称，用户明确允许或拒绝。创建和批准均必须遵循现有 Web 的 CSRF 防护（同站 Cookie、CSRF token/header、Origin/Referer 校验等按现有应用规则实现）。不能把“扫描二维码”视为浏览器授权；Mock 的无登录 HTML 表单仅用于本地测试。
+1. 已认证的 Web 页面调用 `POST /v1/baton/pairings`，将 pairing 绑定到当前用户、浏览器会话和选定 Conversation。生成至少 256 bit 的高熵 `pairing_id`，有效期不超过 60 秒，并返回 QR URL、approval URL、`approval_mode` 和过期时间。`approval_mode` 缺省为 `manual`；只有服务端在自身权限与 Conversation 策略允许时才能设为 `auto`。
+2. QR 只包含绝对的 HTTP 或 HTTPS discovery URL；不得放 bearer token、Conversation 历史或永久凭据。服务端自行选择 transport，V1 要求 discovery 中的 endpoint 与 QR origin 完全同源（scheme、host、port）。HTTP 已被协议支持以兼容既有内网/遗留系统，但 Baton 会持续标记为未加密；服务方必须自行评估该网络不能提供传输保密性与完整性的风险，客户端不会静默升级或降级。
+3. iOS 读取 discovery 后调用 join，提交 `device_id`、展示名和仅本地持有的 `device_proof`。服务只接受一个设备请求：`manual` 转为 `pending`，`auto` 必须在同一事务中直接转为 `approved`。
+4. `manual` 时，Java Web 在已有登录会话下展示设备名称，用户明确允许或拒绝。创建和批准均必须遵循现有 Web 的 CSRF 防护（同站 Cookie、CSRF token/header、Origin/Referer 校验等按现有应用规则实现）。`auto` 不经过这一页，但不是“无安全性”：有效期内 QR 本身成为加入该 Conversation 的短期能力，只有服务端明确认可该风险的受控场景才可启用。不能让 iOS 参数、discovery 字段或前端页面越权选择 `auto`；Mock 的无登录 HTML 表单仅用于本地测试。
 5. iOS 用 `X-Baton-Device-Proof` 轮询 status。批准后首次 claim 签发 Conversation-scoped、绑定设备的短期 Bearer token（规范建议 24 小时）；proof 绑定的重试在 pairing 仍有效时返回同一 token。拒绝或过期永不签发 token。
 
-Java 服务应使 approval 具有服务端授权检查和一次性状态转换，防止任意知道 URL 的人批准 pairing。配对过期、拒绝、重复设备请求、错误 proof 都应是明确的终态/错误，而不是静默成功。
+Java 服务应使 `manual` approval 具有服务端授权检查和一次性状态转换，防止任意知道 URL 的人批准 pairing；`auto` 的启用条件同样必须由服务端授权与策略决定。配对过期、拒绝、重复设备请求、错误 proof 都应是明确的终态/错误，而不是静默成功。
 
 ## Endpoint 契约
 
@@ -47,11 +48,11 @@ Java 服务应使 approval 具有服务端授权检查和一次性状态转换�
 
 | 操作 | Endpoint | 调用方与语义 | 典型错误 |
 | --- | --- | --- | --- |
-| 创建 pairing | `POST /v1/baton/pairings` | Web；创建 Conversation-bound 短期邀请并返回 `pairing_id`、`qr_url`、`approval_url`、`expires_at` | 输入无效时 `400` |
+| 创建 pairing | `POST /v1/baton/pairings` | Web；创建 Conversation-bound 短期邀请并返回 `pairing_id`、`qr_url`、`approval_url`、`approval_mode`、`expires_at`；`approval_mode` 默认 `manual`，服务端可选 `auto` | 输入无效或不允许的 mode 时 `400/403` |
 | Discovery | `GET /.well-known/baton/pair/{pairingId}` | Baton；只返回服务、Conversation、同源 endpoint 和 capabilities，不授予权限 | 未知 `404 pairing_not_found`；过期 `410 pairing_expired` |
-| 加入请求 | `POST /v1/baton/pairings/{id}/requests` | Baton；JSON 提交 `device_id`、`device_name`、`device_proof`；成功为 `202 pending` 并返回 `request_id`、`poll_url` | 字段/低熵 proof `400 invalid_device`；已有请求/非 created `409 pairing_not_available`；未知/过期同上 |
+| 加入请求 | `POST /v1/baton/pairings/{id}/requests` | Baton；JSON 提交 `device_id`、`device_name`、`device_proof`；成功为 `202` 并返回 `request_id`、绝对同源且可由手机直接访问的 `poll_url`；manual 为 pending，auto 原子进入 approved | 字段/低熵 proof `400 invalid_device`；已有请求/非 created `409 pairing_not_available`；未知/过期同上 |
 | 状态/claim | `GET /v1/baton/pairings/{id}/requests/{requestId}` | Baton；必须带 `X-Baton-Device-Proof`；pending 返回重试间隔，approved 返回 token，rejected 返回终态 | proof 不符 `403 invalid_device_proof`；请求不存在 `404 request_not_found`；不可用 `409 pairing_not_available` |
-| 决定 pairing | `POST /v1/baton/pairings/{id}/approval` | Web；现有登录和 CSRF 保护下提交 `{ "decision": "approved"\|"rejected" }` | 无效决定 `400 invalid_decision`；非 pending `409 pairing_not_pending`；未登录/无权由现有 Web 授权层拒绝 |
+| 决定 pairing | `POST /v1/baton/pairings/{id}/approval` | Web；仅 manual，现有登录和 CSRF 保护下提交 `{ "decision": "approved"\|"rejected" }` | 无效决定 `400 invalid_decision`；非 pending/auto `409 pairing_not_pending`；未登录/无权由现有 Web 授权层拒绝 |
 | 快照 | `GET /v1/baton/conversations/{id}` | Baton；Bearer token；原子返回元数据、有上限的初始历史、可选 `active_runs` 和 `event_cursor`，缓存不是事实源 | 无/错 token `401 invalid_token`；未知 Conversation `404 conversation_not_found` |
 | 发送 | `POST /v1/baton/conversations/{id}/messages` | Baton；Bearer token；文本消息必须含 UUID `client_message_id`；相同 id 重试返回原消息，不重复创建 | `401 invalid_token`、`404 conversation_not_found`、`400 invalid_message` |
 | 事件流 | `GET /v1/baton/conversations/{id}/events` | Baton；Bearer token 的 SSE；将 snapshot 的 `event_cursor.id` 放入 `Last-Event-ID` 恢复 | `401 invalid_token`、`404 conversation_not_found`；游标不可恢复时发送 `conversation.resync` |
@@ -60,6 +61,8 @@ Java 服务应使 approval 具有服务端授权检查和一次性状态转换�
 | 断开/撤销 | `DELETE /v1/baton/devices/{deviceId}/sessions/{id}` | Baton；Bearer token；撤销该设备会话并立即阻止后续访问 | `401 invalid_token`；未知资源按服务现有错误映射 |
 
 发送响应首创消息时为 `201`，幂等重试为 `200`。快照与 `event_cursor` 必须由同一个事务/锁内读取：`event_cursor` 至少含 `{ "id": "evt_…", "sequence": 487 }`，并表示该快照已包含的最后一个事件位置。iOS 随后以此 `id` 打开 SSE，服务只回放 sequence 更大的已持久化 envelope。没有 `Last-Event-ID` 的新订阅从当前 tail 开始，不得暗中把整段事件历史推送给客户端。
+
+Join 响应里的 `poll_url` 必须是完整的绝对 URL（含 scheme 和 host），与 discovery / join 的**服务对外 origin** 完全相同，并可由发起请求的 iPhone 直接访问；不得返回 `/v1/...` 这样的相对路径。它只可含 request id，不能含 token 或 `device_proof`，领取仍需 `X-Baton-Device-Proof`。在反向代理或 TLS 终止之后，Java 服务必须使用受信任部署配置确定 canonical external origin（包括所选的 `http` 或 `https` scheme），不能直接信任任意 `Host` 或 `X-Forwarded-*` 请求头来拼 URL。相对、跨 origin 或不可访问的 `poll_url` 是契约失败，Baton 会在 join 阶段拒绝它。
 
 V1 不提供移动端历史分页。snapshot 的 `messages` 必须以时间正序一次返回完整初始窗口：最多最新 200 条完整消息、且序列化文本总量最多 1 MiB，先达到任一边界即截断旧消息。超限返回 `history_truncated: true`，不得返回半条消息、不得返回 `next_cursor`；旧历史仍由现有 Web 产品负责。snapshot 可省略 `active_runs`，客户端按空数组处理；提供时它必须与 history/cursor 同一事务读取，形状为 `[{"run_id":"run_…","status":"running","message_id":"msg_…"}]`，其中 `message_id` 可省略，且只列非终态 run。iOS 用 `run_id` 在重连后恢复 Stop。
 
@@ -84,7 +87,7 @@ cancel 的 `202 cancellation_requested` 只代表服务已接受请求；执行�
 - `device_proof` 由 iOS 用系统安全随机源生成，至少 256 bit；只放请求体和 `X-Baton-Device-Proof` header，绝不放 QR、discovery、URL、HTML 或日志。
 - Java 服务将 proof 与 pairing request 绑定，比较时使用常数时间比较；持久化实现应避免明文长期保存（至少按服务现有 secret 保护策略加密或保存不可逆摘要），并限制读取权限。日志、追踪、异常内容必须脱敏。
 - 一个 pairing 只接受一个设备请求。首次成功 claim 后标记 `consumed`；同一 proof 在邀请仍有效时可以安全重试并得到相同 token，其他 proof 永远不能领取。
-- access token 只代表一个 Conversation 和一个设备，存活期短（规范建议 24 小时），仅通过 HTTPS Bearer header 传输；不放 query string、HTML 或事件数据。当前协议没有规定 refresh endpoint，不要擅自把 refresh token 变成 V1 必需接口。
+- access token 只代表一个 Conversation 和一个设备，存活期短（规范建议 24 小时），只放在 Bearer header 传输；不放 query string、HTML 或事件数据。HTTPS 强烈推荐。若现有服务选择 HTTP，Baton 仍会互通但会持续标记未加密；该网络中的 token 与会话流量不具备传输保密性或完整性，服务方必须承担并限制此风险。当前协议没有规定 refresh endpoint，不要擅自把 refresh token 变成 V1 必需接口。
 - Keychain 由 iOS 保存 token。服务端撤销设备时应使该设备的 token/刷新凭据（若服务已有刷新机制）和活动流失效；Java 服务不应依赖客户端主动删除作为安全边界。
 
 ## Agent 与 AG-UI 事件接入
@@ -118,10 +121,11 @@ cancel 的 `202 cancellation_requested` 只代表服务已接受请求；执行�
 先运行本地 Python fixture，再用 Java endpoint 替换同一请求序列。以下项目直接对应 `mock_server/smoke_test.py` 覆盖内容：
 
 - [ ] Web 创建短期 pairing，discovery 绑定正确 Conversation，QR 不含 token。
-- [ ] 未 claim 前访问 Conversation 返回 `401`；扫描只产生 pending 请求。
+- [ ] manual pairing 未 claim 前访问 Conversation 返回 `401`；扫描只产生 pending 请求；auto pairing 的第一个有效 join 原子进入 approved，仍只能通过 proof-protected claim 获得 token。
 - [ ] 一个 pairing 第二次 join 返回 `409`；Web 能看见设备名。
 - [ ] Web 明确批准后，错误 proof 返回 `403`，正确 proof 才能 claim。
 - [ ] claim 重试返回同一 token；pairing 标记 consumed 且不接受第二台设备。
+- [ ] Join 响应的 `poll_url` 为 discovery/join 同源的绝对服务对外 URL；相对 URL、跨 origin URL 以及缺少 scheme/host 的 URL 均被契约测试和 Baton iOS 拒绝。
 - [ ] Web 拒绝后 status 返回 rejected，永不返回 token。
 - [ ] 过期 pairing 返回 `410 pairing_expired`。
 - [ ] 快照可读且带原子 `event_cursor`；最多返回最新 200 条/1 MiB 的完整消息，超限明确 `history_truncated` 而无分页 cursor；active run 存在时给出可选 `active_runs[{run_id,status,message_id?}]`。重复相同 `client_message_id` 不创建重复用户消息（首次 `201`、重试 `200`）。
@@ -129,7 +133,7 @@ cancel 的 `202 cancellation_requested` 只代表服务已接受请求；执行�
 - [ ] cancel 首次返回已接受，随后按“message cancelled → run.cancelled”获得唯一终态；重复取消不重复发布事件；DELETE 撤销后未来访问被拒绝。
 - [ ] 有 `conversation:close` 权限的 Web 与 Baton 均可 End；无权固定 `403 conversation_close_forbidden`。End 仅广播一条 `conversation.closed`，使所有 token/未决 pairing 失效，丢弃任何晚到的 Agent 输出；同 `Idempotency-Key` 重试不重复结束。下一段会话使用新 Conversation ID 与新事件序列。
 - [ ] AG-UI V1 fixture 映射到上述 Baton 事件；未知 AG-UI 事件只进入诊断，不泄漏到 iOS wire format。
-- [ ] 所有 HTTPS、proof、token、Cookie/CSRF 和日志脱敏检查通过；LM Studio key 不出现在代码、文档、请求或 iOS 包内。
+- [ ] 所有 transport、proof、token、Cookie/CSRF 和日志脱敏检查通过；若选择 HTTP，已确认可信网络与 Baton 的未加密提示；LM Studio key 不出现在代码、文档、请求或 iOS 包内。
 
 ## V1 暂缓
 

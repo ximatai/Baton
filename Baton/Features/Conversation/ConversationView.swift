@@ -4,7 +4,12 @@ struct ConversationView: View {
     @ObservedObject var model: BatonViewModel
     var body: some View {
         VStack(spacing: 0) {
-            ConnectionBanner(status: model.connectionStatus, isConnected: model.isConnected, reconnect: model.reconnect)
+            ConnectionBanner(
+                status: model.connectionStatus,
+                isConnected: model.isConnected,
+                isUnencryptedTransport: model.isUnencryptedTransport,
+                reconnect: model.reconnect
+            )
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 14) {

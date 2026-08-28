@@ -22,7 +22,7 @@ struct ConnectView: View {
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                     .disabled(model.isBusy)
-                    Text("二维码只用于发起加入请求；仍需在网页确认这台设备。")
+                    Text("二维码只用于发起加入请求；是否需要网页确认由服务端的配对策略决定。")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     #if DEBUG && targetEnvironment(simulator)

@@ -67,7 +67,10 @@ struct AgentActivityNotice: View {
 }
 
 struct ConnectionBanner: View {
-    let status: String; let isConnected: Bool; let reconnect: () -> Void
+    let status: String
+    let isConnected: Bool
+    let isUnencryptedTransport: Bool
+    let reconnect: () -> Void
     var body: some View {
         HStack(spacing: 8) {
             Circle()
@@ -76,6 +79,12 @@ struct ConnectionBanner: View {
                 .accessibilityHidden(true)
             Text(status).font(.footnote).lineLimit(1)
             Spacer()
+            if isUnencryptedTransport {
+                Label("未加密", systemImage: "exclamationmark.shield.fill")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.orange)
+                    .accessibilityLabel("当前服务使用未加密 HTTP 连接")
+            }
             if !isConnected { Button("重连", action: reconnect).font(.footnote.bold()) }
         }
         .foregroundStyle(isConnected ? Color.secondary : Color.orange)

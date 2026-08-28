@@ -35,8 +35,8 @@ stop generation, reconnect/resume, and on-device speech-to-text.
 
 Explicitly deferred: image/camera/file input, **Agent action approvals** (HITL),
 tool UI, generated UI, location, Face ID confirmation, and push notification.
-The browser's confirmation of a *device pairing* is different: it is a V1
-security requirement, not an Agent approval feature. The data and event shapes
+Device pairing is different from an Agent approval feature: V1 supports a
+server-controlled `manual` or `auto` pairing policy. The data and event shapes
 remain extensible for the deferred capabilities.
 
 ## Protocol strategy
@@ -73,12 +73,16 @@ leaking directly into the iOS client. The reference adapter lives at
 `mock_server/agui_adapter.py`; it emits drafts only, and the Companion server
 assigns their ids/sequences and persists them like every other Baton event.
 
-V1 mandates HTTPS plus Server-Sent Events (SSE).  A later version may advertise
-WebSocket support, but does not alter event semantics.
+V1 uses service-selected HTTP or HTTPS plus Server-Sent Events (SSE). The QR
+URL chooses the transport; there is no separate transport negotiation. HTTPS
+is strongly recommended, but HTTP remains supported so an existing intranet or
+legacy Web system can adopt Baton without first changing its deployment. Baton
+visibly marks an HTTP conversation as unencrypted. A later version may
+advertise WebSocket support, but does not alter event semantics.
 
 ## QR and pairing
 
-The QR code contains a single HTTPS URL; it must not include bearer tokens,
+The QR code contains a single absolute HTTP or HTTPS URL; it must not include bearer tokens,
 conversation history, or a permanent credential.
 
 ```text
@@ -87,8 +91,12 @@ https://agent.example.com/.well-known/baton/pair/ps_7KDX23
 
 `pairingId` is high entropy, expires in at most 60 seconds, and is bound by the
 service to one conversation and the browser session that created it. A pairing
-accepts exactly one device request. Pairing requires TLS. The iOS client
-rejects HTTP except on a development-only build.
+accepts exactly one device request. The service selects `http` or `https` in
+this URL; every endpoint in the discovery document, including `poll_url`, must
+have the exact same origin (scheme, host, and port). Clients must not silently
+upgrade or downgrade the transport. An HTTP connection is not confidential or
+integrity protected by the transport, so the Baton UI must persistently mark it
+as unencrypted; deployers must limit it to a network whose risk they accept.
 
 ### Flow
 
@@ -128,19 +136,25 @@ for a second join. Tokens are stored in Keychain. Revoking a device invalidates
 its active token and streams. Refresh-token semantics are intentionally outside
 Baton V1.
 
-### Pairing state machine
+### Pairing approval policy and state machine
 
 ```text
-created -- device joins --> pending -- web allows --> approved -- first claim --> consumed
-   |                           |              \ web denies --> rejected
-   +---------------------------+---------------------- expires --> expired
+manual: created -- device joins --> pending -- web allows --> approved -- first claim --> consumed
+                                  |              \ web denies --> rejected
+auto:   created -- device joins -----------------> approved -- first claim --> consumed
+   +---------------------------------------------- expires --> expired
 ```
 
 `consumed` means the invitation has yielded a credential, not that the approved
 device has lost retry rights. A proof-bound retry returns the same token until
-the pairing expires. `rejected` and `expired` never issue a token. Future Java
-integrations must bind creation and approval to the existing authenticated web
-session, store the request's proof securely, and apply these same transitions.
+the pairing expires. `rejected` and `expired` never issue a token. `manual` is
+the required default: the Web user explicitly allows or rejects the device.
+For `auto`, the server atomically approves the first valid device join; it must
+not depend on an iOS-provided preference or permit a second device. The active
+QR is therefore a short-lived capability to enter that exact Conversation, so
+the service must expose `auto` only where that risk is acceptable. Future Java
+integrations must bind creation and manual approval to the existing authenticated
+web session, store the request's proof securely, and apply these same transitions.
 
 ## Discovery document
 
@@ -154,6 +168,7 @@ app render a trustworthy pending-connection screen and submit a join request.
   "expires_at": "2026-08-26T10:31:00Z",
   "service": { "id": "acme-erp", "name": "Acme ERP", "icon_url": "https://agent.example.com/icon.png" },
   "conversation": { "id": "conv_01J...", "title": "Sales analysis", "agent_name": "Sales analyst" },
+  "approval_mode": "manual",
   "endpoints": {
     "join": "https://agent.example.com/v1/baton/pairings/ps_7KDX23/requests",
     "approval": "https://agent.example.com/v1/baton/pairings/ps_7KDX23/approval",
@@ -164,11 +179,14 @@ app render a trustworthy pending-connection screen and submit a join request.
 ```
 
 The app must validate the endpoint origins against the QR origin (same origin
-in V1). `capabilities` is a **server discovery declaration** in V1, not a
-negotiation exchange: `text` is required and must be `true`; `markdown` and
-`streaming` declare optional server behavior. A client may safely ignore an
-unknown key. Remote icon URLs are optional and should be fetched as untrusted
-content.
+in V1). `approval_mode` is a server declaration: absent means `manual` for
+backward compatibility; valid values are `manual` and `auto`. The App may use
+it only to explain the pending state—it must always wait for the proof-bound
+status/claim response before storing a credential. `capabilities` is a **server
+discovery declaration** in V1, not a negotiation exchange: `text` is required
+and must be `true`; `markdown` and `streaming` declare optional server behavior.
+A client may safely ignore an unknown key. Remote icon URLs are optional and
+should be fetched as untrusted content.
 
 ## Conversation HTTP API
 
@@ -177,7 +195,9 @@ All endpoints return JSON. Baton Conversation calls use
 host Web application's existing authenticated session and CSRF protection.
 
 The web server creates a QR pairing with `POST /v1/baton/pairings`, authenticated
-as the web user. The response includes `pairing_id`, `qr_url`, an `approval_url`,
+as the web user. Its optional `approval_mode` is `manual` by default; a service
+may set it to `auto` using its own authorization and Conversation policy. The
+response includes `pairing_id`, `qr_url`, an `approval_url`, `approval_mode`,
 and `expires_at`; the resulting discovery document is the QR target described
 above. This endpoint is browser/integrator-facing, not callable by Baton before
 it holds a conversation-scoped token.
@@ -189,9 +209,35 @@ mobile app only calls `join` and the proof-protected `status` endpoint.
 | Operation | Endpoint | Caller | Purpose |
 | --- | --- | --- | --- |
 | Create | `POST /v1/baton/pairings` | Web | Creates a conversation-bound pairing and QR URL |
-| Join | `POST /v1/baton/pairings/{id}/requests` | Baton | Submits `device_id`, display name, and `device_proof`; returns `request_id` |
+| Join | `POST /v1/baton/pairings/{id}/requests` | Baton | Submits `device_id`, display name, and `device_proof`; returns `request_id`; `auto` pairings are atomically approved here |
 | Status / claim | `GET /v1/baton/pairings/{id}/requests/{requestId}` | Baton | Requires `X-Baton-Device-Proof`; reports pending/rejected or returns the proof-bound token |
-| Decide | `POST /v1/baton/pairings/{id}/approval` | Web | Browser-authorized `{ "decision": "approved" | "rejected" }` |
+| Decide | `POST /v1/baton/pairings/{id}/approval` | Web | Only `manual`; browser-authorized `{ "decision": "approved" | "rejected" }` |
+
+The successful Join response is `202` and includes an absolute
+`poll_url`, for example:
+
+```json
+{
+  "pairing_id": "ps_7KDX23",
+  "request_id": "pr_01J...",
+  "status": "pending",
+  "poll_url": "https://agent.example.com/v1/baton/pairings/ps_7KDX23/requests/pr_01J...",
+  "retry_after_seconds": 2
+}
+```
+
+For `manual`, `status` is `pending` until the Web decision. For `auto`, the
+server returns `approved` after atomically binding the first valid proof; the
+App still uses `poll_url` and `X-Baton-Device-Proof` to claim the credential.
+An auto response must never directly embed the access token in the Join body.
+
+`poll_url` is not a relative path. It must include scheme and host, use the
+same service-facing origin as the discovery URL and Join endpoint, and be directly
+reachable by the iPhone that created the request. It may contain the opaque
+request id, but must never contain an access token or `device_proof`; claim
+continues to require `X-Baton-Device-Proof`. A client must reject a relative,
+malformed, cross-origin, or otherwise unreachable poll URL rather than trying
+to infer a base URL.
 
 The local Python fixture also exposes the approval URL as a tiny HTML form. It
 has no real login and is only a test stand-in for the Java application's

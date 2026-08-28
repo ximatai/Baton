@@ -15,7 +15,7 @@
 App → Features → Core → Apple frameworks / URLSession / Keychain
 ```
 
-- `Core/Protocol` 是唯一网络信任边界；只在此处处理 HTTPS、同源、Bearer 和 SSE。
+- `Core/Protocol` 是唯一网络信任边界；只在此处处理 HTTP(S)、同源、Bearer 和 SSE。
 - `Core/Conversation` 是纯 reducer；不得依赖 SwiftUI、Keychain 或网络。
 - 凭据、proof、outbox 只能放 Keychain。
 - QR 扫描器只返回 URL；Speech service 只负责听写；View 不直接访问 Keychain/API。
@@ -24,8 +24,8 @@ App → Features → Core → Apple frameworks / URLSession / Keychain
 ## 安全
 
 - 不读取、打印、提交或写入 API Key、token、`device_proof`、Cookie。
-- QR 不含 token；扫码不等于授权，必须经过网页确认。
-- Release 仅 HTTPS；HTTP 只允许 Debug 的回环或私有局域网 fixture。
+- QR 不含 token；默认 manual pairing 必须经过网页确认。auto 只能由服务端策略启用；客户端不得自行跳过 proof-bound claim。
+- 服务端可自行选择 HTTP 或 HTTPS；只接受绝对、同源的 HTTP(S) endpoint，绝不静默升级/降级。HTTP 必须在 UI 持续标记为未加密；服务方自行评估其网络风险。
 - Markdown 不使用 WebView；HTML 或混合 HTML 按纯文本显示。
 
 ## 验证

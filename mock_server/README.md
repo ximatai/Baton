@@ -40,8 +40,10 @@ python3 -m venv .venv
 ```
 
 The default address is `http://127.0.0.1:8787`. For an iOS Simulator, this
-address is reachable as-is. HTTP is intentionally allowed only for this local
-fixture; a real deployment must use HTTPS.
+address is reachable as-is. The fixture intentionally uses HTTP to exercise
+the same legacy/intranet transport that Baton supports. The App marks this
+conversation as unencrypted; HTTPS remains strongly recommended for any
+untrusted network.
 
 For a Debug build on a phone sharing the same trusted LAN, bind the fixture to
 all interfaces but advertise the Mac's private IP (never `0.0.0.0`):
@@ -51,9 +53,10 @@ python3 mock_server/mock_server.py --host 0.0.0.0 \
   --public-base-url http://<mac-private-ip>:8787
 ```
 
-The iOS Debug client accepts only loopback or RFC1918 private IPv4 HTTP hosts;
-Release remains HTTPS-only. This is a temporary local-network test path, not a
-production deployment option.
+Both Debug and Release follow the service's HTTP or HTTPS origin. This local
+HTTP path is useful for a phone on the same LAN, but it has no transport
+confidentiality or integrity. A production service must decide whether its
+network boundary makes that risk acceptable; use HTTPS whenever it does not.
 
 After creating a pairing, open its fixture-only browser page at
 `/v1/baton/pairings/{pairing_id}/qr`. The protocol discovery URL in the QR
@@ -99,7 +102,8 @@ JOIN=$(curl -s -X POST -H 'Content-Type: application/json' \
   -d "{\"device_id\":\"simulator-1\",\"device_name\":\"Simulator\",\"device_proof\":\"$DEVICE_PROOF\"}" \
   "http://127.0.0.1:8787/v1/baton/pairings/$PAIRING_ID/requests")
 REQUEST_ID=$(printf '%s' "$JOIN" | python3 -c 'import json,sys; print(json.load(sys.stdin)["request_id"])')
-# Open this in the existing web browser and click Allow (the mock has no login):
+# Manual is the default. Open this in the existing web browser and click Allow
+# (the mock has no login):
 open "http://127.0.0.1:8787/v1/baton/pairings/$PAIRING_ID/approval"
 TOKEN=$(curl -s -H "X-Baton-Device-Proof: $DEVICE_PROOF" \
   "http://127.0.0.1:8787/v1/baton/pairings/$PAIRING_ID/requests/$REQUEST_ID" |
@@ -109,6 +113,13 @@ curl -s -H "Authorization: Bearer $TOKEN" \
 curl -N -H "Authorization: Bearer $TOKEN" \
   "http://127.0.0.1:8787/v1/baton/conversations/$CONVERSATION_ID/events"
 ```
+
+To exercise the server-controlled auto-approval contract, create the pairing
+with `-d '{"approval_mode":"auto"}'`. The first valid join is then approved
+atomically; still poll using `poll_url` and `X-Baton-Device-Proof`, and never
+expect a token in the Join response. This makes the live QR a short-lived
+capability to join that Conversation, so it is intentionally opt-in and the
+fixture console continues to use `manual` by default.
 
 Send with `client_message_id` twice to verify idempotency. The first request
 returns `201`; retries return the original message with `200`.

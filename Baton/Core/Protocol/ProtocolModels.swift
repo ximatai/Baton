@@ -7,9 +7,51 @@ struct PairingEndpoints: Codable, Equatable {
     let approval: URL
     let conversation: URL
 }
+
+enum PairingApprovalMode: String, Codable, Equatable {
+    case manual
+    case auto
+}
+
 struct PairingDocument: Codable, Equatable {
-    let protocolVersion: String; let pairingID: String; let expiresAt: String; let service: ServiceDescriptor; let conversation: ConversationDescriptor; let endpoints: PairingEndpoints
-    enum CodingKeys: String, CodingKey { case protocolVersion = "protocol"; case pairingID = "pairing_id"; case expiresAt = "expires_at"; case service, conversation, endpoints }
+    let protocolVersion: String
+    let pairingID: String
+    let expiresAt: String
+    let service: ServiceDescriptor
+    let conversation: ConversationDescriptor
+    let endpoints: PairingEndpoints
+    /// Absent on pre-policy services; manual preserves the original V1 behavior.
+    let approvalMode: PairingApprovalMode
+
+    enum CodingKeys: String, CodingKey {
+        case protocolVersion = "protocol"
+        case pairingID = "pairing_id"
+        case expiresAt = "expires_at"
+        case service, conversation, endpoints
+        case approvalMode = "approval_mode"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        protocolVersion = try container.decode(String.self, forKey: .protocolVersion)
+        pairingID = try container.decode(String.self, forKey: .pairingID)
+        expiresAt = try container.decode(String.self, forKey: .expiresAt)
+        service = try container.decode(ServiceDescriptor.self, forKey: .service)
+        conversation = try container.decode(ConversationDescriptor.self, forKey: .conversation)
+        endpoints = try container.decode(PairingEndpoints.self, forKey: .endpoints)
+        approvalMode = try container.decodeIfPresent(PairingApprovalMode.self, forKey: .approvalMode) ?? .manual
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(protocolVersion, forKey: .protocolVersion)
+        try container.encode(pairingID, forKey: .pairingID)
+        try container.encode(expiresAt, forKey: .expiresAt)
+        try container.encode(service, forKey: .service)
+        try container.encode(conversation, forKey: .conversation)
+        try container.encode(endpoints, forKey: .endpoints)
+        try container.encode(approvalMode, forKey: .approvalMode)
+    }
 }
 struct MessageContent: Codable, Equatable { let type: String; let text: String? }
 enum MessageRole: String, Codable { case user, assistant }
@@ -101,6 +143,21 @@ struct PendingPairingRequest: Codable, Equatable {
         case requestID = "request_id"
         case pollURL = "poll_url"
         case retryAfterSeconds = "retry_after_seconds"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        pairingID = try container.decode(String.self, forKey: .pairingID)
+        requestID = try container.decode(String.self, forKey: .requestID)
+        pollURL = try container.decode(URL.self, forKey: .pollURL)
+        retryAfterSeconds = try container.decode(Int.self, forKey: .retryAfterSeconds)
+        guard pollURL.scheme != nil, pollURL.host != nil else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .pollURL,
+                in: container,
+                debugDescription: "poll_url must be an absolute network URL."
+            )
+        }
     }
 }
 

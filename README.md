@@ -75,7 +75,7 @@ Baton 将这两种设备各自擅长的部分组合起来：
 4. 手机立即进入该 Conversation，可语音输入或文本输入。
 5. Web 与手机作为平级客户端持续同步；服务端始终拥有会话事实。
 
-扫码本身不等于授权。二维码只包含短期发现地址，最终加入必须由原 Web 会话确认，适合把手机接入已有的企业 Web、Agent Workspace 或内部系统。
+扫码本身不等于授权。二维码只包含短期发现地址；默认由原 Web 会话确认设备加入，也可由服务端针对受控场景明确启用自动批准。无论哪种模式，手机都必须用本机 device_proof 领取会话凭据，适合把手机接入已有的企业 Web、Agent Workspace 或内部系统。
 
 ## 当前能力
 
@@ -128,7 +128,7 @@ python3 mock_server/mock_server.py
 
 然后在浏览器打开 [http://127.0.0.1:8787/](http://127.0.0.1:8787/)。页面可生成二维码、确认手机并作为另一端聊天客户端。iOS Simulator 可直接连接；真机局域网体验、可选 OpenAI-compatible 模型回复和 fixture 细节见 [mock_server/README.md](mock_server/README.md)。
 
-用 Xcode 打开 `Baton.xcodeproj` 后，即可在 Simulator 或已配置的真机运行。Debug 仅为本地开发放行回环与私有局域网 HTTP；正式部署必须使用 HTTPS。
+用 Xcode 打开 `Baton.xcodeproj` 后，即可在 Simulator 或已配置的真机运行。Baton 跟随接入服务的 HTTP 或 HTTPS origin；HTTP 会在 App 内持续标记为“未加密”，适合服务方认可风险的内网或遗留部署。HTTPS 仍是面向互联网或不受控网络的强烈建议，而不是接入 Baton 的前置改造条件。
 
 ## 安全原则
 
@@ -137,6 +137,7 @@ python3 mock_server/mock_server.py
 - 会话凭据与待发送消息仅保存在 iOS Keychain。
 - 语音音频仅在 iPhone 本地识别；只有用户编辑后的文本会发送给服务端。
 - 模型 API Key、Cookie、token 和 `device_proof` 不进入 App、二维码、代码或日志。
+- HTTP 可用于兼容既有服务，但不能提供传输保密性或完整性；Baton 会明确提示，网络边界仍由服务部署方负责。
 
 ## 开源许可
 

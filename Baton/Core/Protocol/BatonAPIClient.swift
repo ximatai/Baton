@@ -10,7 +10,7 @@ enum CompanionAPIError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidPairingURL: return "Pairing URL 无效。"
-        case .insecureEndpoint: return "只允许 HTTPS；本地 DEBUG 演示仅允许回环或私有局域网地址。"
+        case .insecureEndpoint: return "服务地址必须是完整的 HTTP 或 HTTPS URL。"
         case .endpointOriginMismatch: return "服务端端点与 Pairing URL 不属于同一来源。"
         case .invalidResponse: return "服务端响应格式无效。"
         case .server(let status, let code, let message):
@@ -184,11 +184,7 @@ struct BatonAPIClient {
     }
 
     private func validateURL(_ url: URL) throws {
-        if url.scheme?.lowercased() == "https" { return }
-        #if DEBUG
-        if url.scheme?.lowercased() == "http", BatonDebugHTTPHostPolicy.allows(url.host) { return }
-        #endif
-        throw CompanionAPIError.insecureEndpoint(url)
+        guard BatonTransportPolicy.permits(url) else { throw CompanionAPIError.insecureEndpoint(url) }
     }
 
     private func validateSameOrigin(_ pairingURL: URL, _ endpoint: URL) throws {
@@ -377,19 +373,18 @@ private enum BatonEventType {
     }
 }
 
-/// Debug builds may connect to a fixture on the same trusted LAN (for example,
-/// a Mac on an iPhone hotspot). Public HTTP remains rejected even in Debug.
-enum BatonDebugHTTPHostPolicy {
-    static func allows(_ host: String?) -> Bool {
-        guard let host = host?.lowercased() else { return false }
-        if host == "localhost" || host == "127.0.0.1" { return true }
-        let octets = host.split(separator: ".").compactMap { UInt8($0) }
-        guard octets.count == 4 else { return false }
-        switch (octets[0], octets[1]) {
-        case (10, _), (192, 168): return true
-        case (172, 16...31): return true
-        default: return false
-        }
+/// Baton follows the transport selected by the integrating service. HTTP is
+/// deliberately supported for legacy/intranet systems; the UI makes it clear
+/// that such a connection is unencrypted. Same-origin validation still binds
+/// every discovery-provided endpoint to this one selected transport.
+enum BatonTransportPolicy {
+    static func permits(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), url.host != nil else { return false }
+        return scheme == "http" || scheme == "https"
+    }
+
+    static func isEncrypted(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https"
     }
 }
 
