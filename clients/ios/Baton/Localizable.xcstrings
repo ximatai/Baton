@@ -1,133 +1,2098 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
-    "Baton" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Baton" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Baton" } } } },
-    "何为 Baton" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "What is Baton?" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "何为 Baton" } } } },
-    "使用 Baton" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Using Baton" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "使用 Baton" } } } },
-    "完成" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Done" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "完成" } } } },
-    "会话已不可用" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Conversation unavailable" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "会话已不可用" } } } },
-    "此会话已不可用，请返回列表重新扫码。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This conversation is no longer available. Return to the list and scan again." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此会话已不可用，请返回列表重新扫码。" } } } },
-    "服务端已结束此对话。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The service has ended this conversation." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "服务端已结束此对话。" } } } },
-    "把网页的 Agent 对话带到手机上。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Bring your web Agent conversation to your phone." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "把网页的 Agent 对话带到手机上。" } } } },
-    "在各种网站服务或应用中，都会看到与 Agent 对话的窗口；但用电脑打字并不总是最方便。有时我们需要用手机实现更灵活的交流，例如语音。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Many websites and apps now offer an Agent conversation, but typing on a computer is not always the easiest way to respond. A phone can be more flexible, especially for voice." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "在各种网站服务或应用中，都会看到与 Agent 对话的窗口；但用电脑打字并不总是最方便。有时我们需要用手机实现更灵活的交流，例如语音。" } } } },
-    "为每个 Agent 服务开发或安装一个独立 App，成本很高。Baton 定义了一组标准化协议：只要服务提供者接入协议并展示二维码，你就能用这一款 App 与不同的 Agent 服务交流。手机加入同一段对话后，消息会实时同步，网页原有功能不受影响。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Building or installing a separate app for every Agent service is costly. Baton defines a standard protocol: once a service adopts it and shows a QR code, one app can connect you to many Agent services. After your phone joins the same conversation, messages stay in sync while the web keeps its original capabilities." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "为每个 Agent 服务开发或安装一个独立 App，成本很高。Baton 定义了一组标准化协议：只要服务提供者接入协议并展示二维码，你就能用这一款 App 与不同的 Agent 服务交流。手机加入同一段对话后，消息会实时同步，网页原有功能不受影响。" } } } },
-    "需要输入时扫码加入当前对话：手机适合语音，网页继续保留完整工作区。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Scan to join when you need to respond: use your phone for voice while the web keeps its full workspace." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "需要输入时扫码加入当前对话：手机适合语音，网页继续保留完整工作区。" } } } },
-    "使用方式" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "How it works" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "使用方式" } } } },
-    "网页显示 Baton 二维码" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The web page shows a Baton QR code" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "网页显示 Baton 二维码" } } } },
-    "网页系统展示 Baton 接入二维码" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The web system shows a Baton connection QR code" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "网页系统展示 Baton 接入二维码" } } } },
-    "用 Baton 扫码加入当前对话" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Scan with Baton to join the conversation" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "用 Baton 扫码加入当前对话" } } } },
-    "把网页中的对话，接到手机上继续说。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Continue your web conversation on your phone." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "把网页中的对话，接到手机上继续说。" } } } },
-    "当电脑上的 Agent 对话不方便打字时，用 Baton 扫码加入同一段对话。你可以在手机上语音输入、修改文字并发送；网页仍保留原有的业务界面。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "When typing in a web-based Agent conversation is inconvenient, scan with Baton to join the same conversation. Speak, edit the transcription, and send from your phone while the web app keeps its full workspace." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "当电脑上的 Agent 对话不方便打字时，用 Baton 扫码加入同一段对话。你可以在手机上语音输入、修改文字并发送；网页仍保留原有的业务界面。" } } } },
-    "如何开始" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Get started" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "如何开始" } } } },
-    "在网页打开一段 Agent 对话" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Open an Agent conversation on the web" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "在网页打开一段 Agent 对话" } } } },
-    "让网页显示 Baton 二维码。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Have the web page show a Baton QR code." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "让网页显示 Baton 二维码。" } } } },
-    "在这里扫描二维码" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Scan the QR code here" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "在这里扫描二维码" } } } },
-    "经网页确认后，手机会加入当前对话。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "After approval on the web, your phone joins the current conversation." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "经网页确认后，手机会加入当前对话。" } } } },
-    "用语音或文字继续交流" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Continue by voice or text" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "用语音或文字继续交流" } } } },
-    "发送的消息会回到同一段网页对话。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Messages you send return to that same web conversation." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "发送的消息会回到同一段网页对话。" } } } },
-    "Baton 的角色" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "What Baton does" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Baton 的角色" } } } },
-    "Baton 不是浏览器镜像，也不替代你的业务系统。登录、权限、会话和 Agent 仍由原来的网页服务负责；Baton 只是一个随时可加入的手机端。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Baton is not a browser mirror and doesn’t replace your business system. Your web service still owns sign-in, permissions, conversations, and the Agent. Baton is simply a phone client that can join when you need it." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Baton 不是浏览器镜像，也不替代你的业务系统。登录、权限、会话和 Agent 仍由原来的网页服务负责；Baton 只是一个随时可加入的手机端。" } } } },
-    "请只扫描可信网页提供的二维码。若服务使用未加密连接，进入对话后会明确提示。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Only scan QR codes from web pages you trust. Baton clearly flags an unencrypted connection after you enter a conversation." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请只扫描可信网页提供的二维码。若服务使用未加密连接，进入对话后会明确提示。" } } } },
-    "了解 Baton 与接入方式" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Learn about Baton and integration" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "了解 Baton 与接入方式" } } } },
-    "已加入的会话" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Joined conversations" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已加入的会话" } } } },
-    "检查" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Check" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "检查" } } } },
-    "结束" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "End" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "结束" } } } },
-    "断开" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Disconnect" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "断开" } } } },
-    "取消" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Cancel" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "取消" } } } },
-    "断开本机访问？" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Disconnect this device?" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "断开本机访问？" } } } },
-    "结束这段对话？" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "End this conversation?" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "结束这段对话？" } } } },
-    "结束对话" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "End conversation" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "结束对话" } } } },
-    "扫码加入对话" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Join a conversation" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "扫码加入对话" } } } },
-    "扫描网页上的 Baton 二维码" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Scan a Baton QR code on the web" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "扫描网页上的 Baton 二维码" } } } },
-    "扫描二维码" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Scan QR Code" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "扫描二维码" } } } },
-    "重新连接" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Reconnect" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "重新连接" } } } },
-    "断开本次会话" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Disconnect this conversation" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "断开本次会话" } } } },
-    "结束当前对话？" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "End the current conversation?" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "结束当前对话？" } } } },
-    "所有已加入这段对话的设备都会退出。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "All devices that joined this conversation will leave." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "所有已加入这段对话的设备都会退出。" } } } },
-    "加入新会话" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Join conversation" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "加入新会话" } } } },
-    "未加密" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Unencrypted" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "未加密" } } } },
-    "未加密连接" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Unencrypted connection" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "未加密连接" } } } },
-    "当前服务通过 HTTP 传输对话内容。在不可信网络中，内容可能被他人读取或篡改。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This service sends conversation content over HTTP. On an untrusted network, others may be able to read or alter it." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "当前服务通过 HTTP 传输对话内容。在不可信网络中，内容可能被他人读取或篡改。" } } } },
-    "请仅在可信网络中继续，或让服务提供方启用 HTTPS。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Continue only on a network you trust, or ask the service provider to enable HTTPS." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请仅在可信网络中继续，或让服务提供方启用 HTTPS。" } } } },
-    "点按查看连接风险说明" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Double-tap for connection risk details" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "点按查看连接风险说明" } } } },
-    "重连" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Reconnect" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "重连" } } } },
-    "重试" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Retry" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "重试" } } } },
-    "输入消息" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Message" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "输入消息" } } } },
-    "知道了" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "OK" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "知道了" } } } },
-    "等待网页确认" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Waiting for web approval" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "等待网页确认" } } } },
-    "正在自动接入" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Joining automatically" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在自动接入" } } } },
-    "正在连接服务" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Connecting to service" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在连接服务" } } } },
-    "打开网页确认页" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Open approval page" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "打开网页确认页" } } } },
-    "取消等待" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Stop waiting" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "取消等待" } } } },
-    "返回" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Back" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "返回" } } } },
-    "需要相机权限" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Camera access required" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "需要相机权限" } } } },
-    "连接本地演示服务" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Connect to local demo service" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "连接本地演示服务" } } } },
-    "正在思考…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Thinking…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在思考…" } } } },
-    "智能体正在思考…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Agent is thinking…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "智能体正在思考…" } } } },
-    "智能体正在回复…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Agent is responding…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "智能体正在回复…" } } } },
-    "尚未连接" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Not connected" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "尚未连接" } } } },
-    "正在创建本地 Pairing…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Creating local pairing…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在创建本地 Pairing…" } } } },
-    "正在发现服务…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Discovering service…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在发现服务…" } } } },
-    "正在请求加入 %@…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Requesting access to %@…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在请求加入 %@…" } } } },
-    "已连接" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Connected" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已连接" } } } },
-    "已暂停" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Paused" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已暂停" } } } },
-    "正在撤销服务器会话…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Revoking server session…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在撤销服务器会话…" } } } },
-    "正在同步会话…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Syncing conversation…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在同步会话…" } } } },
-    "正在重新同步会话…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Resyncing conversation…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在重新同步会话…" } } } },
-    "连接已中断" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Connection interrupted" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "连接已中断" } } } },
-    "连接中断，正在重连…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Connection interrupted. Reconnecting…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "连接中断，正在重连…" } } } },
-    "连接失败" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Connection failed" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "连接失败" } } } },
-    "对话已结束" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Conversation ended" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "对话已结束" } } } },
-    "会话恢复失败" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t restore conversation" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "会话恢复失败" } } } },
-    "正在准备本地听写…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Preparing on-device dictation…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在准备本地听写…" } } } },
-    "正在下载本地语音模型…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Downloading on-device speech model…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在下载本地语音模型…" } } } },
-    "正在听写，松开即可转写（音频不会离开此设备）" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Listening. Release to transcribe. Audio stays on this device." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在听写，松开即可转写（音频不会离开此设备）" } } } },
-    "正在完成转写…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Finishing transcription…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在完成转写…" } } } },
-    "无法安全保存本次会话（Keychain 错误）。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t securely save this conversation (Keychain error)." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法安全保存本次会话（Keychain 错误）。" } } } },
-    "Pairing URL 无效。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The pairing URL is invalid." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Pairing URL 无效。" } } } },
-    "服务地址必须是完整的 HTTP 或 HTTPS URL。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The service address must be a complete HTTP or HTTPS URL." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "服务地址必须是完整的 HTTP 或 HTTPS URL。" } } } },
-    "服务端端点与 Pairing URL 不属于同一来源。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The server endpoint doesn’t share the pairing URL’s origin." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "服务端端点与 Pairing URL 不属于同一来源。" } } } },
-    "服务端响应格式无效。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The server response is invalid." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "服务端响应格式无效。" } } } },
-    "停止生成" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Stop generating" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "停止生成" } } } },
-    "发送" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Send" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "发送" } } } },
-    "可用" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Available" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "可用" } } } },
-    "当前不可用" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Currently unavailable" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "当前不可用" } } } },
-    "正在检查可用性" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Checking availability" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在检查可用性" } } } },
-    "开始这段对话" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Start this conversation" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "开始这段对话" } } } },
-    "输入文字，或使用麦克风在本地转写后发送。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Type a message, or use the microphone to transcribe it on this device before sending." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "输入文字，或使用麦克风在本地转写后发送。" } } } },
-    "当前服务使用未加密 HTTP 连接" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The current service uses an unencrypted HTTP connection" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "当前服务使用未加密 HTTP 连接" } } } },
-    "开始语音输入" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Start voice input" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "开始语音输入" } } } },
-    "结束语音输入" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Stop voice input" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "结束语音输入" } } } },
-    "长按开始本地语音输入，松开后可编辑转写结果" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Touch and hold to start on-device voice input. Release to edit the transcription." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "长按开始本地语音输入，松开后可编辑转写结果" } } } },
-    "将网页上的 Baton Pairing 二维码放入取景框" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Place the Baton pairing QR code from the web page inside the frame" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "将网页上的 Baton Pairing 二维码放入取景框" } } } },
-    "未获得相机权限" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Camera access not granted" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "未获得相机权限" } } } },
-    "请在“设置 > Baton > 相机”中允许访问后重试。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Allow camera access in Settings > Baton > Camera, then try again." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请在“设置 > Baton > 相机”中允许访问后重试。" } } } },
-    "打开设置" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Open Settings" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "打开设置" } } } },
-    "相机访问受限" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Camera access restricted" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "相机访问受限" } } } },
-    "此设备的相机访问被系统或屏幕使用时间限制。请在系统设置中允许相机后重试。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Camera access is restricted by the system or Screen Time. Allow it in Settings, then try again." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此设备的相机访问被系统或屏幕使用时间限制。请在系统设置中允许相机后重试。" } } } },
-    "当前环境不能扫码" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Scanning unavailable" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "当前环境不能扫码" } } } },
-    "模拟器或无相机设备不能扫描二维码。请在真机上继续。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "A simulator or device without a camera can’t scan QR codes. Continue on a physical device." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "模拟器或无相机设备不能扫描二维码。请在真机上继续。" } } } },
-    "正在请求权限…" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Requesting permission…" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "正在请求权限…" } } } },
-    "Baton 只使用相机读取网页展示的配对二维码。扫码不会自动授权加入会话。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Baton uses the camera only to read pairing QR codes shown on web pages. Scanning never authorizes access automatically." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Baton 只使用相机读取网页展示的配对二维码。扫码不会自动授权加入会话。" } } } },
-    "请在浏览器中确认这台设备的加入请求。确认前不会保存会话凭据。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Confirm this device’s request in the browser. Baton won’t save a conversation credential before approval." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请在浏览器中确认这台设备的加入请求。确认前不会保存会话凭据。" } } } },
-    "此服务已为当前二维码开启自动批准。会话凭据仍只会在服务端签发后保存。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This service enabled automatic approval for this QR code. Baton still saves the conversation credential only after the server issues it." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此服务已为当前二维码开启自动批准。会话凭据仍只会在服务端签发后保存。" } } } },
-    "需要允许麦克风和语音识别权限，才能使用本地听写。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Allow microphone and speech recognition access to use on-device dictation." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "需要允许麦克风和语音识别权限，才能使用本地听写。" } } } },
-    "此设备当前不支持本地语音转文字。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This device doesn’t currently support on-device speech-to-text." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此设备当前不支持本地语音转文字。" } } } },
-    "此麦克风的音频格式不支持本地语音转文字。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This microphone’s audio format doesn’t support on-device speech-to-text." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此麦克风的音频格式不支持本地语音转文字。" } } } },
-    "无法将此麦克风的音频转换为本地听写格式。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Couldn’t convert this microphone’s audio to an on-device dictation format." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "无法将此麦克风的音频转换为本地听写格式。" } } } },
-    "当前语言的本地语音模型不可用或下载失败。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The on-device speech model for the current language is unavailable or couldn’t be downloaded." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "当前语言的本地语音模型不可用或下载失败。" } } } },
-    "Baton 不会自行授予访问权限；是否需要网页确认由服务端决定。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Baton never grants access by itself. The service decides whether web approval is required." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "Baton 不会自行授予访问权限；是否需要网页确认由服务端决定。" } } } },
-    "已取消等待网页确认" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Stopped waiting for web approval" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "已取消等待网页确认" } } } },
-    "消息未能安全暂存，请重新输入。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The message couldn’t be securely queued. Please enter it again." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "消息未能安全暂存，请重新输入。" } } } },
-    "该会话已不在本机保存列表中。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This conversation is no longer saved on this device." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "该会话已不在本机保存列表中。" } } } },
-    "请重新扫描网页中的二维码。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Scan the QR code on the web page again." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "请重新扫描网页中的二维码。" } } } },
-    "会话已失效，请重新扫码配对" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This conversation is no longer valid. Scan to pair again." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "会话已失效，请重新扫码配对" } } } },
-    "二维码配对已过期，请重新扫码。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This pairing QR code has expired. Scan again." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "二维码配对已过期，请重新扫码。" } } } },
-    "此设备无法领取该配对凭据，请重新扫码。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "This device can’t claim the pairing credential. Scan again." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "此设备无法领取该配对凭据，请重新扫码。" } } } },
-    "远端撤销失败；本机会话仍保留" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Remote revocation failed; this device’s conversation is still saved" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "远端撤销失败；本机会话仍保留" } } } },
-    "消息已安全暂存，将在下次连接时以原始请求重试。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "The message was securely queued and will retry with its original request next time you connect." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "消息已安全暂存，将在下次连接时以原始请求重试。" } } } },
-    "等待网页确认时连接中断" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "Connection interrupted while waiting for web approval" } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "等待网页确认时连接中断" } } } },
-    "当前语言（%@）没有可用的本地语音模型。" : { "localizations" : { "en" : { "stringUnit" : { "state" : "translated", "value" : "No on-device speech model is available for %@." } }, "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "当前语言（%@）没有可用的本地语音模型。" } } } }
+    "Baton" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baton"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baton"
+          }
+        }
+      }
+    },
+    "Baton 不会自行授予访问权限；是否需要网页确认由服务端决定。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baton never grants access by itself. The service decides whether web approval is required."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baton 不会自行授予访问权限；是否需要网页确认由服务端决定。"
+          }
+        }
+      }
+    },
+    "Baton 不是浏览器镜像，也不替代你的业务系统。登录、权限、会话和 Agent 仍由原来的网页服务负责；Baton 只是一个随时可加入的手机端。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baton is not a browser mirror and doesn’t replace your business system. Your web service still owns sign-in, permissions, conversations, and the Agent. Baton is simply a phone client that can join when you need it."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baton 不是浏览器镜像，也不替代你的业务系统。登录、权限、会话和 Agent 仍由原来的网页服务负责；Baton 只是一个随时可加入的手机端。"
+          }
+        }
+      }
+    },
+    "Baton 只使用相机读取网页展示的配对二维码。扫码不会自动授权加入会话。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baton uses the camera only to read pairing QR codes shown on web pages. Scanning never authorizes access automatically."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baton 只使用相机读取网页展示的配对二维码。扫码不会自动授权加入会话。"
+          }
+        }
+      }
+    },
+    "Baton 的角色" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What Baton does"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baton 的角色"
+          }
+        }
+      }
+    },
+    "Pairing URL 无效。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The pairing URL is invalid."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing URL 无效。"
+          }
+        }
+      }
+    },
+    "为每个 Agent 服务开发或安装一个独立 App，成本很高。Baton 定义了一组标准化协议：只要服务提供者接入协议并展示二维码，你就能用这一款 App 与不同的 Agent 服务交流。手机加入同一段对话后，消息会实时同步，网页原有功能不受影响。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Building or installing a separate app for every Agent service is costly. Baton defines a standard protocol: once a service adopts it and shows a QR code, one app can connect you to many Agent services. After your phone joins the same conversation, messages stay in sync while the web keeps its original capabilities."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "为每个 Agent 服务开发或安装一个独立 App，成本很高。Baton 定义了一组标准化协议：只要服务提供者接入协议并展示二维码，你就能用这一款 App 与不同的 Agent 服务交流。手机加入同一段对话后，消息会实时同步，网页原有功能不受影响。"
+          }
+        }
+      }
+    },
+    "了解 Baton 与接入方式" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Learn about Baton and integration"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "了解 Baton 与接入方式"
+          }
+        }
+      }
+    },
+    "二维码配对已过期，请重新扫码。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This pairing QR code has expired. Scan again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "二维码配对已过期，请重新扫码。"
+          }
+        }
+      }
+    },
+    "会话已不可用" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversation unavailable"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话已不可用"
+          }
+        }
+      }
+    },
+    "会话已失效，请重新扫码配对" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This conversation is no longer valid. Scan to pair again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话已失效，请重新扫码配对"
+          }
+        }
+      }
+    },
+    "会话恢复失败" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t restore conversation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "会话恢复失败"
+          }
+        }
+      }
+    },
+    "何为 Baton" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What is Baton?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "何为 Baton"
+          }
+        }
+      }
+    },
+    "使用 Baton" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Using Baton"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用 Baton"
+          }
+        }
+      }
+    },
+    "使用方式" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "How it works"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "使用方式"
+          }
+        }
+      }
+    },
+    "停止生成" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop generating"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "停止生成"
+          }
+        }
+      }
+    },
+    "关于 Baton" : {
+
+    },
+    "加入新会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Join conversation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "加入新会话"
+          }
+        }
+      }
+    },
+    "助手：%@" : {
+
+    },
+    "发送" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Send"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送"
+          }
+        }
+      }
+    },
+    "发送的消息会回到同一段网页对话。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Messages you send return to that same web conversation."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "发送的消息会回到同一段网页对话。"
+          }
+        }
+      }
+    },
+    "取消" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消"
+          }
+        }
+      }
+    },
+    "取消等待" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop waiting"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "取消等待"
+          }
+        }
+      }
+    },
+    "可用" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Available"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "可用"
+          }
+        }
+      }
+    },
+    "在各种网站服务或应用中，都会看到与 Agent 对话的窗口；但用电脑打字并不总是最方便。有时我们需要用手机实现更灵活的交流，例如语音。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Many websites and apps now offer an Agent conversation, but typing on a computer is not always the easiest way to respond. A phone can be more flexible, especially for voice."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在各种网站服务或应用中，都会看到与 Agent 对话的窗口；但用电脑打字并不总是最方便。有时我们需要用手机实现更灵活的交流，例如语音。"
+          }
+        }
+      }
+    },
+    "在服务端网页中确认或拒绝此设备请求" : {
+
+    },
+    "在网页打开一段 Agent 对话" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open an Agent conversation on the web"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在网页打开一段 Agent 对话"
+          }
+        }
+      }
+    },
+    "在这里扫描二维码" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scan the QR code here"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在这里扫描二维码"
+          }
+        }
+      }
+    },
+    "如何开始" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Get started"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "如何开始"
+          }
+        }
+      }
+    },
+    "完成" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Done"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "完成"
+          }
+        }
+      }
+    },
+    "对话已结束" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversation ended"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话已结束"
+          }
+        }
+      }
+    },
+    "将网页上的 Baton Pairing 二维码放入取景框" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Place the Baton pairing QR code from the web page inside the frame"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "将网页上的 Baton Pairing 二维码放入取景框"
+          }
+        }
+      }
+    },
+    "尚未连接" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Not connected"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "尚未连接"
+          }
+        }
+      }
+    },
+    "已加入的会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Joined conversations"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已加入的会话"
+          }
+        }
+      }
+    },
+    "已取消等待网页确认" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stopped waiting for web approval"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已取消等待网页确认"
+          }
+        }
+      }
+    },
+    "已暂停" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paused"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已暂停"
+          }
+        }
+      }
+    },
+    "已连接" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connected"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已连接"
+          }
+        }
+      }
+    },
+    "开始语音输入" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start voice input"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始语音输入"
+          }
+        }
+      }
+    },
+    "开始这段对话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Start this conversation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "开始这段对话"
+          }
+        }
+      }
+    },
+    "当前不可用" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Currently unavailable"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前不可用"
+          }
+        }
+      }
+    },
+    "当前服务使用未加密 HTTP 连接" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The current service uses an unencrypted HTTP connection"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前服务使用未加密 HTTP 连接"
+          }
+        }
+      }
+    },
+    "当前服务通过 HTTP 传输对话内容。在不可信网络中，内容可能被他人读取或篡改。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This service sends conversation content over HTTP. On an untrusted network, others may be able to read or alter it."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前服务通过 HTTP 传输对话内容。在不可信网络中，内容可能被他人读取或篡改。"
+          }
+        }
+      }
+    },
+    "当前环境不能扫码" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scanning unavailable"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前环境不能扫码"
+          }
+        }
+      }
+    },
+    "当前语言（%@）没有可用的本地语音模型。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No on-device speech model is available for %@."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前语言（%@）没有可用的本地语音模型。"
+          }
+        }
+      }
+    },
+    "当前语言的本地语音模型不可用或下载失败。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The on-device speech model for the current language is unavailable or couldn’t be downloaded."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当前语言的本地语音模型不可用或下载失败。"
+          }
+        }
+      }
+    },
+    "当电脑上的 Agent 对话不方便打字时，用 Baton 扫码加入同一段对话。你可以在手机上语音输入、修改文字并发送；网页仍保留原有的业务界面。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "When typing in a web-based Agent conversation is inconvenient, scan with Baton to join the same conversation. Speak, edit the transcription, and send from your phone while the web app keeps its full workspace."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "当电脑上的 Agent 对话不方便打字时，用 Baton 扫码加入同一段对话。你可以在手机上语音输入、修改文字并发送；网页仍保留原有的业务界面。"
+          }
+        }
+      }
+    },
+    "我：%@" : {
+
+    },
+    "所有已加入这段对话的设备都会退出。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "All devices that joined this conversation will leave."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "所有已加入这段对话的设备都会退出。"
+          }
+        }
+      }
+    },
+    "打开网页确认页" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open approval page"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开网页确认页"
+          }
+        }
+      }
+    },
+    "打开设置" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open Settings"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "打开设置"
+          }
+        }
+      }
+    },
+    "扫描二维码" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scan QR Code"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扫描二维码"
+          }
+        }
+      }
+    },
+    "扫描网页上的 Baton 二维码" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scan a Baton QR code on the web"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扫描网页上的 Baton 二维码"
+          }
+        }
+      }
+    },
+    "扫码加入对话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Join a conversation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扫码加入对话"
+          }
+        }
+      }
+    },
+    "扫码加入新会话" : {
+
+    },
+    "把网页中的对话，接到手机上继续说。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue your web conversation on your phone."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把网页中的对话，接到手机上继续说。"
+          }
+        }
+      }
+    },
+    "把网页的 Agent 对话带到手机上。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bring your web Agent conversation to your phone."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "把网页的 Agent 对话带到手机上。"
+          }
+        }
+      }
+    },
+    "断开" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disconnect"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "断开"
+          }
+        }
+      }
+    },
+    "断开本机访问？" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disconnect this device?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "断开本机访问？"
+          }
+        }
+      }
+    },
+    "断开本次会话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disconnect this conversation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "断开本次会话"
+          }
+        }
+      }
+    },
+    "无法安全保存本次会话（Keychain 错误）。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t securely save this conversation (Keychain error)."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法安全保存本次会话（Keychain 错误）。"
+          }
+        }
+      }
+    },
+    "无法将此麦克风的音频转换为本地听写格式。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Couldn’t convert this microphone’s audio to an on-device dictation format."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "无法将此麦克风的音频转换为本地听写格式。"
+          }
+        }
+      }
+    },
+    "智能体正在回复…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent is responding…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "智能体正在回复…"
+          }
+        }
+      }
+    },
+    "智能体正在思考…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agent is thinking…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "智能体正在思考…"
+          }
+        }
+      }
+    },
+    "服务地址必须是完整的 HTTP 或 HTTPS URL。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service address must be a complete HTTP or HTTPS URL."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务地址必须是完整的 HTTP 或 HTTPS URL。"
+          }
+        }
+      }
+    },
+    "服务端响应格式无效。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The server response is invalid."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务端响应格式无效。"
+          }
+        }
+      }
+    },
+    "服务端已结束此对话。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service has ended this conversation."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务端已结束此对话。"
+          }
+        }
+      }
+    },
+    "服务端端点与 Pairing URL 不属于同一来源。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The server endpoint doesn’t share the pairing URL’s origin."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务端端点与 Pairing URL 不属于同一来源。"
+          }
+        }
+      }
+    },
+    "未加密" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unencrypted"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未加密"
+          }
+        }
+      }
+    },
+    "未加密连接" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Unencrypted connection"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未加密连接"
+          }
+        }
+      }
+    },
+    "未获得相机权限" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Camera access not granted"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未获得相机权限"
+          }
+        }
+      }
+    },
+    "检查" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Check"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "检查"
+          }
+        }
+      }
+    },
+    "模拟器或无相机设备不能扫描二维码。请在真机上继续。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A simulator or device without a camera can’t scan QR codes. Continue on a physical device."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "模拟器或无相机设备不能扫描二维码。请在真机上继续。"
+          }
+        }
+      }
+    },
+    "正在下载本地语音模型…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Downloading on-device speech model…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在下载本地语音模型…"
+          }
+        }
+      }
+    },
+    "正在准备本地听写…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparing on-device dictation…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在准备本地听写…"
+          }
+        }
+      }
+    },
+    "正在创建本地 Pairing…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Creating local pairing…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在创建本地 Pairing…"
+          }
+        }
+      }
+    },
+    "正在发现服务…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Discovering service…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在发现服务…"
+          }
+        }
+      }
+    },
+    "正在同步会话…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Syncing conversation…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在同步会话…"
+          }
+        }
+      }
+    },
+    "正在听写，松开即可转写（音频不会离开此设备）" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Listening. Release to transcribe. Audio stays on this device."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在听写，松开即可转写（音频不会离开此设备）"
+          }
+        }
+      }
+    },
+    "正在完成转写…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Finishing transcription…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在完成转写…"
+          }
+        }
+      }
+    },
+    "正在思考…" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thinking…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在思考…"
+          }
+        }
+      }
+    },
+    "正在撤销服务器会话…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Revoking server session…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在撤销服务器会话…"
+          }
+        }
+      }
+    },
+    "正在检查可用性" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking availability"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在检查可用性"
+          }
+        }
+      }
+    },
+    "正在自动接入" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Joining automatically"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在自动接入"
+          }
+        }
+      }
+    },
+    "正在请求加入 %@…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Requesting access to %@…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在请求加入 %@…"
+          }
+        }
+      }
+    },
+    "正在请求权限…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Requesting permission…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在请求权限…"
+          }
+        }
+      }
+    },
+    "正在连接服务" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connecting to service"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在连接服务"
+          }
+        }
+      }
+    },
+    "正在重新同步会话…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resyncing conversation…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在重新同步会话…"
+          }
+        }
+      }
+    },
+    "此会话已不可用，请返回列表重新扫码。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This conversation is no longer available. Return to the list and scan again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此会话已不可用，请返回列表重新扫码。"
+          }
+        }
+      }
+    },
+    "此服务已为当前二维码开启自动批准。会话凭据仍只会在服务端签发后保存。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This service enabled automatic approval for this QR code. Baton still saves the conversation credential only after the server issues it."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此服务已为当前二维码开启自动批准。会话凭据仍只会在服务端签发后保存。"
+          }
+        }
+      }
+    },
+    "此设备当前不支持本地语音转文字。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device doesn’t currently support on-device speech-to-text."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备当前不支持本地语音转文字。"
+          }
+        }
+      }
+    },
+    "此设备无法领取该配对凭据，请重新扫码。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This device can’t claim the pairing credential. Scan again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备无法领取该配对凭据，请重新扫码。"
+          }
+        }
+      }
+    },
+    "此设备的相机访问被系统或屏幕使用时间限制。请在系统设置中允许相机后重试。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Camera access is restricted by the system or Screen Time. Allow it in Settings, then try again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此设备的相机访问被系统或屏幕使用时间限制。请在系统设置中允许相机后重试。"
+          }
+        }
+      }
+    },
+    "此麦克风的音频格式不支持本地语音转文字。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This microphone’s audio format doesn’t support on-device speech-to-text."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "此麦克风的音频格式不支持本地语音转文字。"
+          }
+        }
+      }
+    },
+    "消息已安全暂存，将在下次连接时以原始请求重试。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The message was securely queued and will retry with its original request next time you connect."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "消息已安全暂存，将在下次连接时以原始请求重试。"
+          }
+        }
+      }
+    },
+    "消息未能安全暂存，请重新输入。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The message couldn’t be securely queued. Please enter it again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "消息未能安全暂存，请重新输入。"
+          }
+        }
+      }
+    },
+    "点按查看连接风险说明" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Double-tap for connection risk details"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "点按查看连接风险说明"
+          }
+        }
+      }
+    },
+    "用 Baton 扫码加入当前对话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scan with Baton to join the conversation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用 Baton 扫码加入当前对话"
+          }
+        }
+      }
+    },
+    "用语音或文字继续交流" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue by voice or text"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "用语音或文字继续交流"
+          }
+        }
+      }
+    },
+    "相机访问受限" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Camera access restricted"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "相机访问受限"
+          }
+        }
+      }
+    },
+    "知道了" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "OK"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "知道了"
+          }
+        }
+      }
+    },
+    "等待网页确认" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Waiting for web approval"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待网页确认"
+          }
+        }
+      }
+    },
+    "等待网页确认时连接中断" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection interrupted while waiting for web approval"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "等待网页确认时连接中断"
+          }
+        }
+      }
+    },
+    "经网页确认后，手机会加入当前对话。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "After approval on the web, your phone joins the current conversation."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "经网页确认后，手机会加入当前对话。"
+          }
+        }
+      }
+    },
+    "结束" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束"
+          }
+        }
+      }
+    },
+    "结束对话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End conversation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束对话"
+          }
+        }
+      }
+    },
+    "结束当前对话？" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End the current conversation?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束当前对话？"
+          }
+        }
+      }
+    },
+    "结束语音输入" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop voice input"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束语音输入"
+          }
+        }
+      }
+    },
+    "结束这段对话？" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "End this conversation?"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "结束这段对话？"
+          }
+        }
+      }
+    },
+    "网页显示 Baton 二维码" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The web page shows a Baton QR code"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网页显示 Baton 二维码"
+          }
+        }
+      }
+    },
+    "网页系统展示 Baton 接入二维码" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The web system shows a Baton connection QR code"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "网页系统展示 Baton 接入二维码"
+          }
+        }
+      }
+    },
+    "让网页显示 Baton 二维码。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Have the web page show a Baton QR code."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "让网页显示 Baton 二维码。"
+          }
+        }
+      }
+    },
+    "该会话已不在本机保存列表中。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "This conversation is no longer saved on this device."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "该会话已不在本机保存列表中。"
+          }
+        }
+      }
+    },
+    "语音或文字继续交流" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue by voice or text"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "语音或文字继续交流"
+          }
+        }
+      }
+    },
+    "请仅在可信网络中继续，或让服务提供方启用 HTTPS。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Continue only on a network you trust, or ask the service provider to enable HTTPS."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请仅在可信网络中继续，或让服务提供方启用 HTTPS。"
+          }
+        }
+      }
+    },
+    "请只扫描可信网页提供的二维码。若服务使用未加密连接，进入对话后会明确提示。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Only scan QR codes from web pages you trust. Baton clearly flags an unencrypted connection after you enter a conversation."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请只扫描可信网页提供的二维码。若服务使用未加密连接，进入对话后会明确提示。"
+          }
+        }
+      }
+    },
+    "请在“设置 > Baton > 相机”中允许访问后重试。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow camera access in Settings > Baton > Camera, then try again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在“设置 > Baton > 相机”中允许访问后重试。"
+          }
+        }
+      }
+    },
+    "请在浏览器中确认这台设备的加入请求。确认前不会保存会话凭据。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirm this device’s request in the browser. Baton won’t save a conversation credential before approval."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在浏览器中确认这台设备的加入请求。确认前不会保存会话凭据。"
+          }
+        }
+      }
+    },
+    "请重新扫描网页中的二维码。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scan the QR code on the web page again."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请重新扫描网页中的二维码。"
+          }
+        }
+      }
+    },
+    "输入文字，或使用麦克风在本地转写后发送。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Type a message, or use the microphone to transcribe it on this device before sending."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入文字，或使用麦克风在本地转写后发送。"
+          }
+        }
+      }
+    },
+    "输入消息" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Message"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "输入消息"
+          }
+        }
+      }
+    },
+    "返回" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Back"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "返回"
+          }
+        }
+      }
+    },
+    "远端撤销失败；本机会话仍保留" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Remote revocation failed; this device’s conversation is still saved"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "远端撤销失败；本机会话仍保留"
+          }
+        }
+      }
+    },
+    "连接中断，正在重连…" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection interrupted. Reconnecting…"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接中断，正在重连…"
+          }
+        }
+      }
+    },
+    "连接失败" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection failed"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接失败"
+          }
+        }
+      }
+    },
+    "连接已中断" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connection interrupted"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接已中断"
+          }
+        }
+      }
+    },
+    "连接本地演示服务" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Connect to local demo service"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "连接本地演示服务"
+          }
+        }
+      }
+    },
+    "重新连接" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconnect"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重新连接"
+          }
+        }
+      }
+    },
+    "重试" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Retry"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重试"
+          }
+        }
+      }
+    },
+    "重连" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reconnect"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "重连"
+          }
+        }
+      }
+    },
+    "长按开始本地语音输入，松开后可编辑转写结果" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Touch and hold to start on-device voice input. Release to edit the transcription."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "长按开始本地语音输入，松开后可编辑转写结果"
+          }
+        }
+      }
+    },
+    "需要允许麦克风和语音识别权限，才能使用本地听写。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow microphone and speech recognition access to use on-device dictation."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要允许麦克风和语音识别权限，才能使用本地听写。"
+          }
+        }
+      }
+    },
+    "需要相机权限" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Camera access required"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要相机权限"
+          }
+        }
+      }
+    },
+    "需要输入时扫码加入当前对话：手机适合语音，网页继续保留完整工作区。" : {
+      "extractionState" : "stale",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Scan to join when you need to respond: use your phone for voice while the web keeps its full workspace."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "需要输入时扫码加入当前对话：手机适合语音，网页继续保留完整工作区。"
+          }
+        }
+      }
+    }
   },
   "version" : "1.0"
 }
