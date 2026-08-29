@@ -783,7 +783,7 @@ final class BatonViewModel: ObservableObject {
         sessionAvailability[session.id] = await Self.probeAvailability(of: session, api: api).1
     }
 
-    private nonisolated static func probeAvailability(
+    private static func probeAvailability(
         of session: StoredConversationSession,
         api: BatonAPIClient
     ) async -> (String, ConversationAvailability) {

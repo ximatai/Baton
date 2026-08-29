@@ -1,4 +1,4 @@
-import AVFAudio
+@preconcurrency import AVFAudio
 import Combine
 import Foundation
 import Speech
