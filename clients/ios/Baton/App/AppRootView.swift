@@ -39,7 +39,6 @@ struct ContentView: View {
                         ToolbarItem(placement: .topBarTrailing) {
                             Menu {
                                 Button("重新连接", systemImage: "arrow.clockwise") { model.reconnect() }
-                                    .disabled(model.isConversationReadOnly)
                                 Button("结束对话", systemImage: "xmark.circle", role: .destructive) { isEndConfirmationPresented = true }
                                 Button("断开本次会话", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) { model.disconnect() }
                             } label: { Image(systemName: "ellipsis.circle") }

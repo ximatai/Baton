@@ -29,7 +29,7 @@ struct ConnectView: View {
                 .padding(24)
             } else {
                 List {
-                    Section("已加入的会话") {
+                    Section {
                         ForEach(model.savedSessions) { session in
                             Button { openSession(session.id) } label: {
                                 sessionRow(session)
@@ -41,8 +41,8 @@ struct ConnectView: View {
                                     Task { await model.refreshSessionAvailability(sessionID: session.id) }
                                 } label: {
                                     Label("检查", systemImage: "arrow.clockwise")
-                                }
-                                .tint(.blue)
+                            }
+                            .tint(.blue)
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                 Button(role: .destructive) {
@@ -178,7 +178,7 @@ struct ConnectView: View {
 
     private var confirmationMessage: String {
         switch pendingSessionAction?.kind {
-        case .disconnect: "将撤销这台设备访问“\(pendingSessionAction?.session.conversation.title ?? "")”的权限，并从列表移除。"
+        case .disconnect: "将从本机移除“\(pendingSessionAction?.session.conversation.title ?? "")”的访问凭据和待发送消息；若服务端可访问，也会同时撤销该设备会话。"
         case .end: "所有已加入“\(pendingSessionAction?.session.conversation.title ?? "")”的设备都会退出。"
         case nil: ""
         }

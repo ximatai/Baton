@@ -9,7 +9,7 @@ struct ConversationView: View {
             ConnectionBanner(
                 status: model.connectionStatus,
                 isConnected: model.isConnected,
-                canReconnect: !model.isConversationReadOnly,
+                canReconnect: true,
                 isUnencryptedTransport: model.isUnencryptedTransport,
                 reconnect: model.reconnect
             )
@@ -29,11 +29,7 @@ struct ConversationView: View {
                 .onChange(of: model.messages) { _, messages in if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) } }
             }
             if let error = model.errorMessage {
-                if model.isConversationReadOnly {
-                    ErrorNotice(text: error, retry: nil)
-                } else {
-                    ErrorNotice(text: error, retry: { model.reconnect() })
-                }
+                ErrorNotice(text: error, retry: { model.reconnect() })
             }
             Divider().opacity(0.6)
             VStack(alignment: .leading, spacing: 6) {
@@ -59,9 +55,7 @@ struct ConversationView: View {
                         Image(systemName: model.voiceState.isRecording ? "waveform" : "mic")
                             .font(.body.weight(.semibold))
                             .foregroundStyle(
-                                model.isConversationReadOnly
-                                    ? Color.secondary
-                                    : (model.voiceState.isRecording ? .red : Color.accentColor)
+                                model.voiceState.isRecording ? .red : Color.accentColor
                             )
                             .frame(width: 28, height: 28)
                             .accessibilityHidden(true)

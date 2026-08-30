@@ -35,6 +35,15 @@ enum ConversationAvailability: Equatable {
     case unavailable
 }
 
+private enum SessionAvailabilityProbe {
+    case available
+    case unavailable
+    /// A response which proves that this locally held credential or
+    /// conversation can no longer be used. Unlike a transport failure, it
+    /// should not leave a dead entry in the saved-session list.
+    case terminal
+}
+
 @MainActor
 final class BatonViewModel: ObservableObject {
     @Published private(set) var messages: [ConversationMessage] = []
@@ -46,9 +55,6 @@ final class BatonViewModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isBusy = false
     @Published private(set) var isConnected = false
-    /// Terminal server failures remain in the local list until the user removes
-    /// them explicitly; the conversation is then view-only.
-    @Published private(set) var isConversationReadOnly = false
     @Published private(set) var isWaitingForApproval = false
     @Published private(set) var pendingServiceName: String?
     @Published private(set) var pendingConversationTitle: String?
@@ -79,11 +85,10 @@ final class BatonViewModel: ObservableObject {
 
     var canSend: Bool {
         credential != nil
-            && !isConversationReadOnly
             && !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !isBusy
     }
-    var isComposerDisabled: Bool { isConversationReadOnly || isBusy }
+    var isComposerDisabled: Bool { isBusy }
     var isUnencryptedTransport: Bool {
         guard let endpoint = credential?.conversationEndpoint else { return false }
         return !BatonTransportPolicy.isEncrypted(endpoint)
@@ -171,7 +176,7 @@ final class BatonViewModel: ObservableObject {
 
     func send() {
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !isConversationReadOnly, !text.isEmpty, let credential else { return }
+        guard !text.isEmpty, let credential else { return }
         let pending = PendingOutboxMessage(text: text, credential: credential)
         speechInput.discardTranscript()
         composerText = ""
@@ -204,11 +209,11 @@ final class BatonViewModel: ObservableObject {
         Task {
             do {
                 try await api.endConversation(endpoint: credential.conversationEndpoint, token: credential.accessToken, idempotencyKey: idempotencyKey)
-                closeConversation()
+                closeConversation(matching: credential)
             } catch {
                 // The server may have ended the conversation but the original
                 // response was lost. Its explicit terminal code is authoritative.
-                if isConversationClosed(error) { closeConversation() }
+                if isConversationClosed(error) { closeConversation(matching: credential) }
                 else { errorMessage = error.localizedDescription }
             }
         }
@@ -255,7 +260,7 @@ final class BatonViewModel: ObservableObject {
         for session in sessions {
             sessionAvailability[session.id] = .checking
         }
-        await withTaskGroup(of: (String, ConversationAvailability).self) { group in
+        await withTaskGroup(of: (StoredConversationSession, SessionAvailabilityProbe).self) { group in
             var remainingSessions = sessions.makeIterator()
 
             for _ in 0..<min(3, sessions.count) {
@@ -265,8 +270,8 @@ final class BatonViewModel: ObservableObject {
                 }
             }
 
-            while let (sessionID, availability) = await group.next() {
-                sessionAvailability[sessionID] = availability
+            while let (session, result) = await group.next() {
+                applyAvailabilityProbe(result, for: session)
                 if let session = remainingSessions.next() {
                     group.addTask { [api] in
                         await Self.probeAvailability(of: session, api: api)
@@ -287,8 +292,10 @@ final class BatonViewModel: ObservableObject {
 
     func disconnectSavedSession(id: String) {
         Task {
+            var capturedCredential: SessionCredential?
             do {
                 guard let session = try KeychainStore.loadSessions().first(where: { $0.id == id }) else { return }
+                capturedCredential = session.credential
                 sessionAvailability[id] = .checking
                 try await api.revoke(
                     endpoint: session.credential.conversationEndpoint,
@@ -298,15 +305,22 @@ final class BatonViewModel: ObservableObject {
                 )
                 removeSavedSessionLocally(session.credential)
             } catch {
-                handleSavedSessionOperationFailure(error, sessionID: id)
+                // Disconnect means this device must stop retaining access even
+                // when the server cannot be reached. The user is told that a
+                // remote revocation could not be confirmed.
+                if let capturedCredential, removeSavedSessionLocally(capturedCredential) {
+                    errorMessage = String(localized: "未能通知服务端，已仅从本机断开；远端会话可能仍有效。")
+                }
             }
         }
     }
 
     func endSavedSession(id: String) {
         Task {
+            var capturedCredential: SessionCredential?
             do {
                 guard let session = try KeychainStore.loadSessions().first(where: { $0.id == id }) else { return }
+                capturedCredential = session.credential
                 sessionAvailability[id] = .checking
                 try await api.endConversation(
                     endpoint: session.credential.conversationEndpoint,
@@ -316,14 +330,9 @@ final class BatonViewModel: ObservableObject {
                 removeSavedSessionLocally(session.credential)
             } catch {
                 if isConversationClosed(error) {
-                    do {
-                        guard let session = try KeychainStore.loadSessions().first(where: { $0.id == id }) else { return }
-                        removeSavedSessionLocally(session.credential)
-                    } catch {
-                        errorMessage = error.localizedDescription
-                    }
+                    if let capturedCredential { removeSavedSessionLocally(capturedCredential) }
                 } else {
-                    handleSavedSessionOperationFailure(error, sessionID: id)
+                    if let capturedCredential { handleSavedSessionOperationFailure(error, session: capturedCredential) }
                 }
             }
         }
@@ -364,21 +373,23 @@ final class BatonViewModel: ObservableObject {
         Task {
             do {
                 try await api.revoke(endpoint: credential.conversationEndpoint, token: credential.accessToken, deviceID: credential.deviceID, sessionID: credential.sessionID)
-                removeLocalSession()
+                removeLocalSession(matching: credential)
             } catch {
                 if isConversationClosed(error) {
-                    closeConversation()
+                    closeConversation(matching: credential)
                 } else if isInvalidToken(error) {
                     // The user explicitly chose to disconnect this device. A
                     // server-side revocation that already happened has the
                     // same intended local result.
-                    removeLocalSession()
+                    removeLocalSession(matching: credential)
                 } else {
-                    // A local deletion here would falsely report that access was
-                    // revoked. Preserve the credential and allow explicit retry.
-                    shouldMaintainConnection = true
-                    connectionStatus = String(localized: "远端撤销失败；本机会话仍保留")
-                    errorMessage = error.localizedDescription
+                    // The explicit user action still has a useful local
+                    // meaning when a server cannot be reached: this device
+                    // discards its credential and queued messages.
+                    if removeLocalSession(matching: credential) {
+                        connectionStatus = String(localized: "已仅从本机断开")
+                        errorMessage = "\(String(localized: "未能通知服务端；远端会话可能仍有效。"))\n\(error.localizedDescription)"
+                    }
                 }
             }
         }
@@ -389,24 +400,28 @@ final class BatonViewModel: ObservableObject {
         if resetBackoff { reconnectAttempt = 0 }
         streamTask?.cancel(); isBusy = true; connectionStatus = String(localized: "正在同步会话…"); isConnected = false; errorMessage = nil
         Task {
-            do { try await loadSnapshot(using: credential); startEventStream() }
-            catch { handleSessionFailure(error) }
+            do {
+                guard try await loadSnapshot(using: credential) else { return }
+                startEventStream(using: credential)
+            } catch { handleSessionFailure(error, for: credential) }
         }
     }
 
-    private func loadSnapshot(using credential: SessionCredential) async throws {
+    private func loadSnapshot(using credential: SessionCredential) async throws -> Bool {
         let snapshot = try await api.snapshot(endpoint: credential.conversationEndpoint, token: credential.accessToken)
+        guard credential == self.credential else { return false }
         // These assignments are intentionally adjacent on MainActor: the event
         // cursor and message list describe the same server-side instant.
         reducer.replaceSnapshot(snapshot)
         messages = reducer.messages
         conversation = ConversationDescriptor(id: snapshot.id, title: snapshot.title, agentName: snapshot.agentName)
         restoreActiveRun(from: snapshot)
+        return true
     }
 
-    private func startEventStream() {
-        guard let credential else { return }
-        streamTask?.cancel(); isBusy = false; isConnected = true; isConversationReadOnly = false; connectionStatus = "\(String(localized: "已连接")) · \(credential.service.name)"
+    private func startEventStream(using credential: SessionCredential) {
+        guard credential == self.credential else { return }
+        streamTask?.cancel(); isBusy = false; isConnected = true; connectionStatus = "\(String(localized: "已连接")) · \(credential.service.name)"
         sessionAvailability[credential.conversationKey] = .available
         let startAfter = reducer.cursor?.id
         outboxRetryTask?.cancel()
@@ -415,26 +430,27 @@ final class BatonViewModel: ObservableObject {
             do {
                 for try await event in api.events(endpoint: credential.conversationEndpoint, token: credential.accessToken, lastEventID: startAfter) {
                     guard !Task.isCancelled else { return }
-                    if await self?.apply(event) == true { return }
+                    if await self?.apply(event, for: credential) == true { return }
                 }
-                await self?.streamEnded(nil)
-            } catch { await self?.streamEnded(error) }
+                await self?.streamEnded(nil, for: credential)
+            } catch { await self?.streamEnded(error, for: credential) }
         }
     }
 
-    private func apply(_ event: BatonEvent) async -> Bool {
+    private func apply(_ event: BatonEvent, for credential: SessionCredential) async -> Bool {
+        guard credential == self.credential else { return true }
         if event.type == "conversation.resync" {
-            await resynchronize()
+            await resynchronize(using: credential)
             return true
         }
         if event.type == "conversation.closed" {
-            markActiveSessionReadOnly(detail: String(localized: "服务端已结束此对话。"))
+            discardTerminatedActiveSession(detail: String(localized: "服务端已结束此对话。"), matching: credential)
             return true
         }
         let mustResync = reducer.apply(event)
         messages = reducer.messages
         if mustResync {
-            await resynchronize()
+            await resynchronize(using: credential)
             return true
         }
         switch event.type {
@@ -456,14 +472,14 @@ final class BatonViewModel: ObservableObject {
         return false
     }
 
-    private func resynchronize() async {
+    private func resynchronize(using credential: SessionCredential) async {
         do {
-            guard let credential else { return }
+            guard credential == self.credential else { return }
             connectionStatus = String(localized: "正在重新同步会话…")
-            try await loadSnapshot(using: credential)
-            startEventStream()
+            guard try await loadSnapshot(using: credential) else { return }
+            startEventStream(using: credential)
         } catch {
-            handleSessionFailure(error)
+            handleSessionFailure(error, for: credential)
         }
     }
 
@@ -508,7 +524,7 @@ final class BatonViewModel: ObservableObject {
             removeOutbox(pending.clientMessageID)
         } catch {
             if isConversationClosed(error) || isInvalidToken(error) {
-                markActiveSessionReadOnly(error)
+                discardTerminatedActiveSession(error, matching: credential)
                 return
             }
             guard attemptsRemaining > 1, shouldMaintainConnection else {
@@ -531,7 +547,9 @@ final class BatonViewModel: ObservableObject {
         } catch { errorMessage = error.localizedDescription }
     }
 
-    private func removeLocalSession() {
+    @discardableResult
+    private func removeLocalSession(matching expectedCredential: SessionCredential? = nil) -> Bool {
+        guard expectedCredential == nil || credential == expectedCredential else { return false }
         let removedCredential = credential
         shouldMaintainConnection = false
         streamTask?.cancel(); streamTask = nil
@@ -539,34 +557,13 @@ final class BatonViewModel: ObservableObject {
         let persistenceError = removedCredential.flatMap { removePersistedSession($0) }
         credential = nil; conversation = nil; messages = []; reducer = ConversationEventReducer()
         activeRunID = nil; agentActivity = .idle; isConnected = false; isBusy = false; connectionStatus = String(localized: "尚未连接"); errorMessage = persistenceError
-        isConversationReadOnly = false
         endIdempotencyKey = nil
+        return persistenceError == nil
     }
 
-    private func closeConversation() {
-        removeLocalSession()
+    private func closeConversation(matching credential: SessionCredential? = nil) {
+        guard removeLocalSession(matching: credential) else { return }
         connectionStatus = String(localized: "对话已结束")
-    }
-
-    private func markActiveSessionReadOnly(_ error: Error) {
-        markActiveSessionReadOnly(detail: error.localizedDescription)
-    }
-
-    private func markActiveSessionReadOnly(detail: String) {
-        shouldMaintainConnection = false
-        streamTask?.cancel(); streamTask = nil
-        outboxRetryTask?.cancel(); outboxRetryTask = nil
-        speechInput.discardTranscript()
-        activeRunID = nil
-        agentActivity = .idle
-        isBusy = false
-        isConnected = false
-        isConversationReadOnly = true
-        connectionStatus = String(localized: "会话已不可用")
-        errorMessage = "\(String(localized: "此会话已不可用，请返回列表重新扫码。"))\n\(detail)"
-        if let credential {
-            sessionAvailability[credential.conversationKey] = .unavailable
-        }
     }
 
     private func isInvalidToken(_ error: Error) -> Bool {
@@ -577,8 +574,9 @@ final class BatonViewModel: ObservableObject {
         (error as? CompanionAPIError)?.closesConversation == true
     }
 
-    private func handleSessionFailure(_ error: Error) {
-        if isConversationClosed(error) || isInvalidToken(error) { markActiveSessionReadOnly(error) }
+    private func handleSessionFailure(_ error: Error, for credential: SessionCredential) {
+        guard credential == self.credential else { return }
+        if isConversationClosed(error) || isInvalidToken(error) { discardTerminatedActiveSession(error, matching: credential) }
         else { failConnection(error) }
     }
 
@@ -589,10 +587,10 @@ final class BatonViewModel: ObservableObject {
         return try? JSONDecoder().decode(ConversationMessage.self, from: data)
     }
 
-    private func streamEnded(_ error: Error?) async {
-        guard shouldMaintainConnection, !Task.isCancelled else { return }
+    private func streamEnded(_ error: Error?, for credential: SessionCredential) async {
+        guard credential == self.credential, shouldMaintainConnection, !Task.isCancelled else { return }
         if let error, isConversationClosed(error) || isInvalidToken(error) {
-            markActiveSessionReadOnly(error)
+            discardTerminatedActiveSession(error, matching: credential)
             return
         }
         guard reconnectAttempt < 5 else {
@@ -729,7 +727,7 @@ final class BatonViewModel: ObservableObject {
     }
 
     func beginVoiceInput() {
-        guard !isConversationReadOnly, !voiceState.isWorking else { return }
+        guard !voiceState.isWorking else { return }
         speechInput.start(initialText: composerText)
     }
 
@@ -752,7 +750,6 @@ final class BatonViewModel: ObservableObject {
         activeRunID = nil
         agentActivity = .idle
         isConnected = false
-        isConversationReadOnly = false
         isBusy = false
         shouldMaintainConnection = true
         reconnectAttempt = 0
@@ -780,35 +777,65 @@ final class BatonViewModel: ObservableObject {
 
     private func refreshAvailability(of session: StoredConversationSession) async {
         sessionAvailability[session.id] = .checking
-        sessionAvailability[session.id] = await Self.probeAvailability(of: session, api: api).1
+        applyAvailabilityProbe(await Self.probeAvailability(of: session, api: api).1, for: session)
     }
 
     private static func probeAvailability(
         of session: StoredConversationSession,
         api: BatonAPIClient
-    ) async -> (String, ConversationAvailability) {
+    ) async -> (StoredConversationSession, SessionAvailabilityProbe) {
         do {
             _ = try await api.snapshot(
                 endpoint: session.credential.conversationEndpoint,
                 token: session.credential.accessToken,
                 timeout: 8
             )
-            return (session.id, .available)
+            return (session, .available)
         } catch {
-            return (session.id, .unavailable)
+            return (session, isTerminalSavedSessionError(error) ? .terminal : .unavailable)
         }
     }
 
-    private func removeSavedSessionLocally(_ session: SessionCredential) {
-        if credential?.conversationKey == session.conversationKey {
-            removeLocalSession()
-        } else if let error = removePersistedSession(session) {
-            errorMessage = error
+    private func applyAvailabilityProbe(_ result: SessionAvailabilityProbe, for session: StoredConversationSession) {
+        // Ignore a delayed probe after the same Conversation has been paired
+        // again and its stored device session has been replaced.
+        guard let current = try? KeychainStore.loadSessions().first(where: { $0.id == session.id }),
+              current.credential == session.credential else { return }
+        switch result {
+        case .available:
+            sessionAvailability[session.id] = .available
+        case .unavailable:
+            sessionAvailability[session.id] = .unavailable
+        case .terminal:
+            removeSavedSessionLocally(session.credential)
         }
+    }
+
+    @discardableResult
+    private func removeSavedSessionLocally(_ session: SessionCredential) -> Bool {
+        if credential?.conversationKey == session.conversationKey {
+            return removeLocalSession(matching: session)
+        }
+        do {
+            guard let saved = try KeychainStore.loadSessions().first(where: { $0.id == session.conversationKey }),
+                  saved.credential == session else { return false }
+        } catch {
+            errorMessage = error.localizedDescription
+            return false
+        }
+        if let error = removePersistedSession(session) {
+            errorMessage = error
+            return false
+        }
+        return true
     }
 
     private func removePersistedSession(_ session: SessionCredential) -> String? {
         do {
+            guard let saved = try KeychainStore.loadSessions().first(where: { $0.id == session.conversationKey }) else { return nil }
+            // The same Conversation can be paired again with a replacement
+            // device session while an earlier request is still in flight.
+            guard saved.credential == session else { return nil }
             updateSavedSessions(try KeychainStore.removeConversation(conversationKey: session.conversationKey))
             let retainedOutbox = try KeychainStore.loadOutbox().filter { !$0.belongs(toConversationOf: session) }
             try KeychainStore.saveOutbox(retainedOutbox)
@@ -820,17 +847,27 @@ final class BatonViewModel: ObservableObject {
         }
     }
 
-    private func handleSavedSessionOperationFailure(_ error: Error, sessionID: String) {
-        if isInvalidToken(error) {
-            do {
-                guard let session = try KeychainStore.loadSessions().first(where: { $0.id == sessionID }) else { return }
-                removeSavedSessionLocally(session.credential)
-            } catch {
-                errorMessage = error.localizedDescription
-            }
+    private func handleSavedSessionOperationFailure(_ error: Error, session: SessionCredential) {
+        if Self.isTerminalSavedSessionError(error) {
+            removeSavedSessionLocally(session)
         } else {
-            sessionAvailability[sessionID] = .unavailable
+            sessionAvailability[session.conversationKey] = .unavailable
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func discardTerminatedActiveSession(_ error: Error, matching credential: SessionCredential) {
+        discardTerminatedActiveSession(detail: error.localizedDescription, matching: credential)
+    }
+
+    private func discardTerminatedActiveSession(detail: String, matching credential: SessionCredential) {
+        guard removeLocalSession(matching: credential) else { return }
+        connectionStatus = String(localized: "会话已不可用")
+        errorMessage = detail
+    }
+
+    private static func isTerminalSavedSessionError(_ error: Error) -> Bool {
+        guard case let CompanionAPIError.server(status, code, _) = error else { return false }
+        return status == 401 || status == 410 || code == "invalid_token" || code == "session_revoked" || code == "conversation_closed" || code == "conversation_not_found"
     }
 }

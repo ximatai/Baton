@@ -499,7 +499,24 @@
         }
       }
     },
+    "已仅从本机断开" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disconnected on this device"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已仅从本机断开"
+          }
+        }
+      }
+    },
     "已加入的会话" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1054,6 +1071,38 @@
         }
       }
     },
+    "未能通知服务端，已仅从本机断开；远端会话可能仍有效。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not notify the server. Disconnected on this device; the remote session may still be active."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未能通知服务端，已仅从本机断开；远端会话可能仍有效。"
+          }
+        }
+      }
+    },
+    "未能通知服务端；远端会话可能仍有效。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Could not notify the server; the remote session may still be active."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "未能通知服务端；远端会话可能仍有效。"
+          }
+        }
+      }
+    },
     "未获得相机权限" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1347,6 +1396,7 @@
       }
     },
     "此会话已不可用，请返回列表重新扫码。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1900,6 +1950,7 @@
       }
     },
     "远端撤销失败；本机会话仍保留" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
