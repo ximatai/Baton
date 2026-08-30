@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Repeatable pairing and conversation smoke test; starts no server itself."""
 import json
+import os
 import sys
 import threading
 import time
@@ -11,6 +12,7 @@ from urllib.parse import urlparse
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8787"
 CONVERSATION_ID = None
+REVIEW_DEMO_TOKEN = os.environ.get("BATON_REVIEW_DEMO_TOKEN")
 
 
 def request(path, method="GET", payload=None, token=None, expect_json=True, extra_headers=None):
@@ -31,6 +33,18 @@ def create_pairing(payload=None):
     status, pairing = request("/v1/baton/pairings", "POST", payload or {})
     assert status == 200 and pairing["pairing_id"].startswith("ps_")
     return pairing
+
+
+if REVIEW_DEMO_TOKEN:
+    # A stable review URL is not itself a pairing credential. It creates a
+    # normal, short-lived, auto-approved invitation for a single scanner.
+    status, page = request(f"/review/{REVIEW_DEMO_TOKEN}", expect_json=False)
+    assert status == 200 and "App Review Demo" in page
+    status, review_pair = request(f"/review/{REVIEW_DEMO_TOKEN}/pairing", "POST", {})
+    assert status == 200 and review_pair["approval_mode"] == "auto"
+    assert review_pair["expires_at"].endswith("Z")
+    status, review_discovery = request("/.well-known/baton/pair/" + review_pair["pairing_id"])
+    assert status == 200 and review_discovery["approval_mode"] == "auto"
 
 
 def read_sse_until(token, last_event_id, predicate, maximum=20):

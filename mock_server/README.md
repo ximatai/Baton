@@ -58,6 +58,30 @@ HTTP path is useful for a phone on the same LAN, but it has no transport
 confidentiality or integrity. A production service must decide whether its
 network boundary makes that risk acceptable; use HTTPS whenever it does not.
 
+## Opt-in App Review demo page
+
+The fixture can expose a stable, token-protected **local** review page. Its URL
+is not a pairing credential: loading it creates a new 45-second, single-device
+QR invitation with server-controlled `auto` approval. This demonstrates the
+correct review experience without relaxing the protocol's 60-second QR limit.
+
+```sh
+python3 mock_server/mock_server.py --review-demo-token local-review-token-1234
+```
+
+Open `http://127.0.0.1:8787/review/local-review-token-1234` on a separate
+screen, then scan the QR with Baton. The page rotates an expired code itself.
+For a local regression check, run the smoke test with the same token:
+
+```sh
+BATON_REVIEW_DEMO_TOKEN=local-review-token-1234 python3 mock_server/smoke_test.py
+```
+
+This remains an in-memory development fixture and must not be exposed as a
+production service. A later deployment needs HTTPS, a high-entropy secret
+route, isolation from real data, and an operational process for rotating that
+route after review.
+
 After creating a pairing, open its fixture-only browser page at
 `/v1/baton/pairings/{pairing_id}/qr`. The protocol discovery URL in the QR
 remains `/.well-known/baton/pair/{pairing_id}` and correctly returns JSON to a

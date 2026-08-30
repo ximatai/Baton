@@ -137,6 +137,8 @@ class Store:
 STORE = None
 CHAT_COMPLETER = None
 SSE_LIVE_SECONDS = 300
+REVIEW_DEMO_TOKEN = None
+REVIEW_DEMO_TTL_SECONDS = 45
 
 
 class ChatCompletionError(Exception):
@@ -403,6 +405,21 @@ class Handler(BaseHTTPRequestHandler):
         image.save(output, format="PNG")
         return self.send_png(output.getvalue())
 
+    def review_demo_page(self):
+        """Stable, opt-in page which creates a fresh short-lived review QR."""
+        page = '''<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baton App Review Demo</title><style>
+*{box-sizing:border-box}body{font:16px -apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f7;color:#1d1d1f;margin:0;min-height:100vh;display:grid;place-items:center}.card{max-width:540px;margin:24px;padding:32px;text-align:center;background:#fff;border-radius:24px;box-shadow:0 8px 30px #00000012}.eyebrow{color:#0071e3;font-weight:700;font-size:12px;letter-spacing:.08em;text-transform:uppercase}.title{font-size:28px;margin:10px 0}.copy{color:#6e6e73;line-height:1.5}.qr{width:min(76vw,320px);margin:18px auto;display:block;image-rendering:pixelated}.status{font-weight:600;min-height:24px}.hint{color:#6e6e73;font-size:14px;line-height:1.45}.new{border:0;border-radius:10px;background:#0071e3;color:white;font:inherit;font-weight:600;padding:11px 16px;cursor:pointer}</style>
+<main class="card"><div class="eyebrow">Baton · App Review Demo</div><h1 class="title">Scan to join the demo</h1><p class="copy">Open this page on a separate screen, then scan the QR code with Baton. The demo uses isolated data and creates a fresh, short-lived invitation automatically.</p><img class="qr" id="qr" alt="Short-lived Baton review pairing QR code"><p class="status" id="status">Creating a secure review QR…</p><p class="hint" id="hint"></p><button class="new" id="new">Generate a fresh QR</button><p class="hint"><a href="https://ximatai.net/apps/baton">Learn more about Baton</a></p></main>
+<script>
+let expiresAt=0, timer=null; const $=id=>document.getElementById(id); const pairingEndpoint=location.pathname==='/'?'/pairing':location.pathname+'/pairing';
+function show(text,hint=''){$('status').textContent=text;$('hint').textContent=hint;}
+async function create(){clearInterval(timer);show('Creating a secure review QR…');const response=await fetch(pairingEndpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!response.ok){show('Could not create the review QR.','Please reload this page.');return}const pairing=await response.json();$('qr').src='/v1/baton/pairings/'+pairing.pairing_id+'/qr.png';expiresAt=Date.parse(pairing.expires_at);tick();timer=setInterval(tick,1000);}
+function tick(){const seconds=Math.max(0,Math.ceil((expiresAt-Date.now())/1000));if(!seconds){clearInterval(timer);create();return}show('Ready to scan.','This QR expires in '+seconds+' seconds and is valid for one device.');}
+$('new').onclick=create; create();
+</script>'''
+        return self.send_html(page)
+
     def console_page(self):
         """Human-facing fixture console; never a Companion Profile endpoint."""
         page = '''<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -500,6 +517,11 @@ create();
 
     def do_POST(self):
         path, raw = urlparse(self.path).path.rstrip("/"), self.raw_body()
+        if REVIEW_DEMO_TOKEN and path == f"/review/{REVIEW_DEMO_TOKEN}/pairing":
+            # This route is separate from normal pairing, which stays manual by default.
+            return self.create_pairing({"approval_mode": "auto", "mock_ttl_seconds": REVIEW_DEMO_TTL_SECONDS})
+        if path.startswith("/review/"):
+            return self.error(404, "not_found", "Not found.")
         prefix = "/v1/baton/pairings/"
         if path == "/v1/baton/pairings":
             try: return self.create_pairing(json.loads(raw or b"{}"))
@@ -626,6 +648,10 @@ create();
         path = urlparse(self.path).path.rstrip("/")
         discovery_prefix, pairing_prefix = "/.well-known/baton/pair/", "/v1/baton/pairings/"
         if path == "": return self.console_page()
+        if REVIEW_DEMO_TOKEN and path == f"/review/{REVIEW_DEMO_TOKEN}":
+            return self.review_demo_page()
+        if path.startswith("/review/"):
+            return self.error(404, "not_found", "Not found.")
         if path.startswith(discovery_prefix):
             pairing_id = path[len(discovery_prefix):]
             with STORE.lock:
@@ -739,13 +765,14 @@ create();
 
 
 def main():
-    global STORE, CHAT_COMPLETER, SSE_LIVE_SECONDS
+    global STORE, CHAT_COMPLETER, SSE_LIVE_SECONDS, REVIEW_DEMO_TOKEN
     parser = argparse.ArgumentParser(description="Local Baton Companion mock server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--public-base-url", help="advertised URL when binding a LAN interface (fixture only)")
     parser.add_argument("--event-retention", type=int, default=64, help="retained SSE event envelopes per conversation (fixture only)")
     parser.add_argument("--sse-live-seconds", type=int, default=300, help="maximum duration of one fixture SSE connection")
+    parser.add_argument("--review-demo-token", help="enable token-protected /review/<token> auto-pairing demo (fixture only)")
     parser.add_argument("--openai-chat-completions-url", help="optional OpenAI-compatible chat completion endpoint")
     parser.add_argument("--openai-model", help="model for the optional OpenAI-compatible endpoint")
     parser.add_argument("--openai-reasoning-effort", choices=("none", "low", "medium", "high"), help="optional provider-specific reasoning setting")
@@ -753,6 +780,8 @@ def main():
     args = parser.parse_args()
     if args.sse_live_seconds < 1:
         parser.error("--sse-live-seconds must be positive")
+    if args.review_demo_token is not None and len(args.review_demo_token) < 16:
+        parser.error("--review-demo-token must contain at least 16 characters")
     if bool(args.openai_chat_completions_url) != bool(args.openai_model):
         parser.error("--openai-chat-completions-url and --openai-model must be supplied together")
     if args.openai_chat_completions_url:
@@ -767,6 +796,7 @@ def main():
             reasoning_effort=args.openai_reasoning_effort,
         )
     SSE_LIVE_SECONDS = args.sse_live_seconds
+    REVIEW_DEMO_TOKEN = args.review_demo_token
     STORE = Store(args.public_base_url or f"http://{args.host}:{args.port}", event_retention=args.event_retention)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     provider = f" with OpenAI-compatible model {args.openai_model}" if CHAT_COMPLETER else " with deterministic replies"
