@@ -40,7 +40,15 @@ struct BatonAPIClient: Sendable {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
-    init(session: URLSession = .shared) { self.session = session }
+    private static let protectedSession = URLSession(
+        configuration: .default,
+        delegate: BatonRedirectDelegate(),
+        delegateQueue: nil
+    )
+
+    /// Test callers may inject a URLSession. Production requests always use a
+    /// session that refuses redirects, so credentials never follow a 3xx hop.
+    init(session: URLSession? = nil) { self.session = session ?? Self.protectedSession }
 
     func createLocalPairing() async throws -> URL {
         let root = URL(string: "http://127.0.0.1:8787")!
@@ -218,6 +226,20 @@ private func batonDebugSSE(_ message: String) {
     #endif
 }
 
+/// Baton endpoint URLs are capabilities. Do not let URLSession forward their
+/// authorization headers or pairing proof to a redirect target.
+private final class BatonRedirectDelegate: NSObject, URLSessionTaskDelegate {
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
 private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate {
     private let continuation: AsyncThrowingStream<BatonEvent, Error>.Continuation
     private let decoder: JSONDecoder
@@ -231,6 +253,17 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate {
     init(continuation: AsyncThrowingStream<BatonEvent, Error>.Continuation, decoder: JSONDecoder) {
         self.continuation = continuation
         self.decoder = decoder
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        batonDebugSSE("redirect_rejected")
+        completionHandler(nil)
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse, completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {

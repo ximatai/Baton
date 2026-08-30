@@ -35,6 +35,7 @@ struct ContentView: View {
             .navigationDestination(for: String.self) { _ in
                 ConversationView(model: model)
                     .navigationTitle(model.conversation?.title ?? "Baton")
+                    .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
                             Menu {

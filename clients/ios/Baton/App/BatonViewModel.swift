@@ -213,7 +213,9 @@ final class BatonViewModel: ObservableObject {
             } catch {
                 // The server may have ended the conversation but the original
                 // response was lost. Its explicit terminal code is authoritative.
-                if isConversationClosed(error) { closeConversation(matching: credential) }
+                if isConversationClosed(error) || isInvalidToken(error) {
+                    closeConversation(matching: credential)
+                }
                 else { errorMessage = error.localizedDescription }
             }
         }
@@ -410,6 +412,11 @@ final class BatonViewModel: ObservableObject {
     private func loadSnapshot(using credential: SessionCredential) async throws -> Bool {
         let snapshot = try await api.snapshot(endpoint: credential.conversationEndpoint, token: credential.accessToken)
         guard credential == self.credential else { return false }
+        // A same-origin proxy must not be able to substitute a different
+        // conversation for the credential selected by the user.
+        guard credential.ownsConversation(id: snapshot.id) else {
+            throw CompanionAPIError.invalidResponse
+        }
         // These assignments are intentionally adjacent on MainActor: the event
         // cursor and message list describe the same server-side instant.
         reducer.replaceSnapshot(snapshot)
@@ -445,6 +452,12 @@ final class BatonViewModel: ObservableObject {
         }
         if event.type == "conversation.closed" {
             discardTerminatedActiveSession(detail: String(localized: "服务端已结束此对话。"), matching: credential)
+            return true
+        }
+        if event.type == "message.created",
+           let message = decodeMessage(event.data),
+           !credential.ownsConversation(id: message.conversationID) {
+            handleSessionFailure(CompanionAPIError.invalidResponse, for: credential)
             return true
         }
         let mustResync = reducer.apply(event)

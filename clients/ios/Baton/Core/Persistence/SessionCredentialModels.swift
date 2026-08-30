@@ -27,6 +27,12 @@ struct SessionCredential: Codable, Equatable {
         let port = conversationEndpoint.port.map { ":\($0)" } ?? ""
         return "\(scheme)://\(host)\(port)|\(conversation.id)"
     }
+
+    /// Every authenticated response must remain bound to the Conversation
+    /// originally granted by this credential, even behind a same-origin proxy.
+    func ownsConversation(id: String) -> Bool {
+        conversation.id == id
+    }
 }
 
 /// Keychain-backed metadata for a Conversation the user has explicitly joined.

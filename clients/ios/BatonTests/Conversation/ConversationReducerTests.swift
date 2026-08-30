@@ -97,4 +97,11 @@ struct ConversationReducerTests {
         #expect(restored.clientMessageID == uuid.uuidString)
         #expect(restored.belongs(to: credential))
     }
+
+    @Test func credentialsRejectSnapshotsForAnotherConversation() {
+        let credential = SessionCredential(accessToken: "test-token", deviceID: "ios_1", sessionID: "session_1", service: ServiceDescriptor(id: "service", name: "Service", iconURL: nil), conversation: ConversationDescriptor(id: "conv_1", title: "Test", agentName: nil), conversationEndpoint: URL(string: "https://example.test/v1/baton/conversations/conv_1")!)
+
+        #expect(credential.ownsConversation(id: "conv_1"))
+        #expect(!credential.ownsConversation(id: "conv_other"))
+    }
 }

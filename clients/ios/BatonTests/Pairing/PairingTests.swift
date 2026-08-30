@@ -15,6 +15,7 @@ struct PairingTests {
     @Test func unauthorizedResponseIsTerminalForSavedCredential() {
         let invalid = CompanionAPIError.server(status: 401, code: "invalid_token", message: "expired")
         #expect(invalid.invalidatesSessionCredential)
+        #expect(CompanionAPIError.server(status: 401, code: "session_revoked", message: "ended elsewhere").invalidatesSessionCredential)
         #expect(!CompanionAPIError.server(status: 503, code: "temporary", message: "retry").invalidatesSessionCredential)
         #expect(CompanionAPIError.server(status: 410, code: "conversation_closed", message: "ended").closesConversation)
         #expect(!CompanionAPIError.server(status: 410, code: "pairing_expired", message: "expired").closesConversation)
