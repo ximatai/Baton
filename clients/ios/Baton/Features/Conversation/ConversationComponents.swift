@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MessageBubble: View {
     let message: ConversationMessage
+    let imageLoader: BatonImageLoader?
     private let contentPadding: CGFloat = 10
 
     var body: some View {
@@ -13,21 +14,50 @@ struct MessageBubble: View {
                     .frame(width: 26, height: 26)
                     .background(Color.accentColor.opacity(0.12), in: Circle())
                     .accessibilityHidden(true)
-                MarkdownMessageView(source: message.text.isEmpty && message.status == "streaming" ? "正在思考…" : message.text)
+                MessageContentStack(message: message, imageLoader: imageLoader)
                     .padding(contentPadding)
                     .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                     .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.primary.opacity(0.07)) }
                 Spacer(minLength: 48)
             } else {
                 Spacer(minLength: 48)
-                Text(message.text)
-                    .textSelection(.enabled)
+                MessageContentStack(message: message, imageLoader: imageLoader)
                     .padding(contentPadding)
                     .foregroundStyle(.white)
                     .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
         }
-        .accessibilityLabel(message.role == .assistant ? "助手：\(message.text)" : "我：\(message.text)")
+    }
+}
+
+private struct MessageContentStack: View {
+    let message: ConversationMessage
+    let imageLoader: BatonImageLoader?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if message.content.isEmpty, message.status == "streaming" {
+                Text("正在思考…")
+            } else {
+                ForEach(Array(message.content.enumerated()), id: \.offset) { _, content in
+                    switch content {
+                    case let .text(text):
+                        if message.role == .assistant {
+                            MarkdownMessageView(source: text)
+                        } else {
+                            Text(text).textSelection(.enabled)
+                        }
+                    case let .image(image):
+                        RemoteMessageImageView(content: image, loader: imageLoader)
+                    case let .unsupported(type, alt):
+                        Label(alt ?? "此内容暂不支持（\(type)）", systemImage: "questionmark.square.dashed")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel(alt ?? "此内容暂不支持，类型：\(type)")
+                    }
+                }
+            }
+        }
     }
 }
 

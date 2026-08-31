@@ -65,6 +65,9 @@ final class BatonViewModel: ObservableObject {
     /// connection; summaries intentionally contain no session credential.
     @Published private(set) var savedSessions: [ConversationSessionSummary] = []
     @Published private(set) var sessionAvailability: [String: ConversationAvailability] = [:]
+    /// Owns the in-memory, authenticated media cache for the selected
+    /// conversation. Views receive this narrow loader, never a credential.
+    @Published private(set) var imageLoader: BatonImageLoader?
 
     private let api = BatonAPIClient()
     private let speechInput = SpeechInputService()
@@ -419,7 +422,7 @@ final class BatonViewModel: ObservableObject {
         }
         // These assignments are intentionally adjacent on MainActor: the event
         // cursor and message list describe the same server-side instant.
-        reducer.replaceSnapshot(snapshot)
+        guard reducer.replaceSnapshot(snapshot) else { throw CompanionAPIError.invalidResponse }
         messages = reducer.messages
         conversation = ConversationDescriptor(id: snapshot.id, title: snapshot.title, agentName: snapshot.agentName)
         restoreActiveRun(from: snapshot)
@@ -568,7 +571,7 @@ final class BatonViewModel: ObservableObject {
         streamTask?.cancel(); streamTask = nil
         outboxRetryTask?.cancel(); outboxRetryTask = nil
         let persistenceError = removedCredential.flatMap { removePersistedSession($0) }
-        credential = nil; conversation = nil; messages = []; reducer = ConversationEventReducer()
+        credential = nil; conversation = nil; messages = []; reducer = ConversationEventReducer(); imageLoader = nil
         activeRunID = nil; agentActivity = .idle; isConnected = false; isBusy = false; connectionStatus = String(localized: "尚未连接"); errorMessage = persistenceError
         endIdempotencyKey = nil
         return persistenceError == nil
@@ -757,6 +760,9 @@ final class BatonViewModel: ObservableObject {
         speechInput.discardTranscript()
         composerText = ""
         credential = selectedCredential
+        imageLoader = BatonImageLoader(endpoint: selectedCredential.conversationEndpoint, token: selectedCredential.accessToken) { [weak self] in
+            self?.discardTerminatedActiveSession(detail: String(localized: "媒体访问凭据已失效，请重新连接。"), matching: selectedCredential)
+        }
         conversation = selectedCredential.conversation
         messages = []
         reducer = ConversationEventReducer()

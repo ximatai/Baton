@@ -17,7 +17,7 @@ struct ConversationView: View {
                 ScrollView {
                     LazyVStack(spacing: 14) {
                         if model.messages.isEmpty { ConversationEmptyState() }
-                        ForEach(model.messages) { message in MessageBubble(message: message).id(message.id) }
+                        ForEach(model.messages) { message in MessageBubble(message: message, imageLoader: model.imageLoader).id(message.id) }
                     }
                     .frame(maxWidth: 680)
                     .padding(.horizontal, 16)

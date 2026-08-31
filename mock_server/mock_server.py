@@ -10,6 +10,7 @@ import secrets
 import threading
 import time
 import uuid
+import zlib
 from io import BytesIO
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +28,27 @@ def fixture_log(event, **fields):
     details = " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
     suffix = f" {details}" if details else ""
     print(f"[Baton mock] {now()} {event}{suffix}", flush=True)
+
+
+def _png_chunk(kind, payload):
+    import struct
+    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xffffffff)
+
+
+def demo_image_png():
+    """Generate a small deterministic, static RGB PNG without an image dependency."""
+    import struct
+    width, height = 320, 200
+    rows = bytearray()
+    for y in range(height):
+        rows.append(0)  # PNG's no-filter byte
+        for x in range(width):
+            rows.extend((35 + x * 90 // width, 110 + y * 80 // height, 190 - x * 70 // width))
+    return b"\x89PNG\r\n\x1a\n" + _png_chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)) + _png_chunk(b"IDAT", zlib.compress(bytes(rows), 9)) + _png_chunk(b"IEND", b"")
+
+
+DEMO_IMAGE_PATH = "/v1/baton/media/mock-chart.png"
+DEMO_IMAGE_BYTES = demo_image_png()
 
 
 class Store:
@@ -50,7 +72,13 @@ class Store:
         self.conversation_id = "conv_" + uuid.uuid4().hex
         self.messages, self.runs, self.events, self.next_sequence = [], {}, [], 1
         self.conversation_closed = False
-        welcome = self.add_message("msg_welcome", None, "assistant", "这是本地 Baton Mock Server，可以直接开始对话。")
+        welcome = self.add_message(
+            "msg_welcome", None, "assistant", content=[
+                {"type": "text", "text": "这是本地 Baton Mock Server，可以直接开始对话。\n\n这是一个受认证图片示例："},
+                {"type": "image", "url": self.base_url + DEMO_IMAGE_PATH, "mime_type": "image/png", "width": 320, "height": 200, "alt": "蓝色渐变的本地 Mock 图表示例"},
+                {"type": "text", "text": "\n\n图片与会话一样仅从同源服务读取。"},
+            ]
+        )
         self.event("conversation.snapshot", {"conversation_id": self.conversation_id, "messages": [welcome]})
 
     def close_conversation(self):
@@ -67,10 +95,10 @@ class Store:
         self.event("conversation.closed", {"conversation_id": self.conversation_id})
         return True
 
-    def add_message(self, message_id, client_id, role, text, status="completed"):
+    def add_message(self, message_id, client_id, role, text=None, status="completed", content=None):
         message = {"id": message_id, "client_message_id": client_id,
                    "conversation_id": self.conversation_id, "role": role,
-                   "content": [{"type": "text", "text": text}], "created_at": now(), "status": status}
+                   "content": copy.deepcopy(content) if content is not None else [{"type": "text", "text": text}], "created_at": now(), "status": status}
         self.messages.append(message)
         return message
 
@@ -219,6 +247,7 @@ class Handler(BaseHTTPRequestHandler):
         elif "/pairings/" in path and "/requests/" in path: route = "pairing.claim"
         elif "/pairings/" in path and path.endswith("/approval"): route = "pairing.approval"
         elif "/pairings/" in path and path.endswith("/mock-status"): route = "pairing.status"
+        elif path == DEMO_IMAGE_PATH: route = "conversation.media"
         elif path.endswith("/events"): route = "conversation.events"
         elif path.endswith("/messages"): route = "conversation.messages"
         elif "/runs/" in path: route = "conversation.cancel"
@@ -251,9 +280,9 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def send_png(self, value):
+    def send_media(self, value, mime_type):
         self.send_response(200)
-        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Type", mime_type)
         self.send_header("Content-Length", str(len(value)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
@@ -665,7 +694,7 @@ create();
                 "endpoints": {"join": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/requests",
                               "approval": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/approval",
                               "conversation": f"{STORE.base_url}/v1/baton/conversations/{STORE.conversation_id}"},
-                "capabilities": {"text": True, "markdown": True, "streaming": True}})
+                "capabilities": {"text": True, "markdown": True, "streaming": True, "image": True}})
         if path.startswith(pairing_prefix) and path.endswith("/approval"):
             return self.approval_page(path[len(pairing_prefix):-len("/approval")].strip("/"))
         if path.startswith(pairing_prefix) and path.endswith("/qr"):
@@ -680,6 +709,7 @@ create();
         if path == "/v1/baton/mock/web/conversation": return self.conversation_snapshot()
         if path == "/v1/baton/mock/web/events": return self.sse()
         if not self.auth(): return self.error(401, "invalid_token", "Missing or invalid bearer token.")
+        if path == DEMO_IMAGE_PATH: return self.send_media(DEMO_IMAGE_BYTES, "image/png")
         conversation_path = f"/v1/baton/conversations/{STORE.conversation_id}"
         if path == conversation_path: return self.conversation_snapshot()
         if path == conversation_path + "/events": return self.sse()

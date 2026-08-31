@@ -30,8 +30,9 @@ between the browser and the phone.
 
 ## Scope
 
-Included: QR pairing, text and Markdown messages, history, streaming output,
-stop generation, reconnect/resume, and on-device speech-to-text.
+Included: QR pairing, text and Markdown messages, authenticated display of
+server-hosted static images, history, streaming output, stop generation,
+reconnect/resume, and on-device speech-to-text.
 
 Explicitly deferred: image/camera/file input, **Agent action approvals** (HITL),
 tool UI, generated UI, location, Face ID confirmation, and push notification.
@@ -174,7 +175,7 @@ app render a trustworthy pending-connection screen and submit a join request.
     "approval": "https://agent.example.com/v1/baton/pairings/ps_7KDX23/approval",
     "conversation": "https://agent.example.com/v1/baton/conversations/conv_01J..."
   },
-  "capabilities": { "text": true, "markdown": true, "streaming": true }
+  "capabilities": { "text": true, "markdown": true, "streaming": true, "image": true }
 }
 ```
 
@@ -184,7 +185,9 @@ backward compatibility; valid values are `manual` and `auto`. The App may use
 it only to explain the pending state—it must always wait for the proof-bound
 status/claim response before storing a credential. `capabilities` is a **server
 discovery declaration** in V1, not a negotiation exchange: `text` is required
-and must be `true`; `markdown` and `streaming` declare optional server behavior.
+and must be `true`; `markdown`, `streaming`, and `image` declare optional server
+behavior. `image: true` means the server may emit the read-only `image` content
+item below; it does not authorize image upload or grant access to arbitrary URLs.
 A client may safely ignore an unknown key. Remote icon URLs are optional and
 should be fetched as untrusted content.
 
@@ -247,6 +250,7 @@ authenticated web page.
 | --- | --- | --- |
 | Snapshot | `GET /v1/baton/conversations/{id}` | Conversation metadata, bounded initial history, live runs, and an atomic resumable event cursor |
 | Send | `POST /v1/baton/conversations/{id}/messages` | Idempotently creates a user message |
+| Read media | `GET` URL carried by an `image` content item | Authenticated static image bytes |
 | Events | `GET /v1/baton/conversations/{id}/events` | SSE stream; supports `Last-Event-ID` |
 | Stop | `POST /v1/baton/conversations/{id}/runs/{runId}:cancel` | Requests cancellation of a live agent run |
 | End | `POST /v1/baton/conversations/{id}:end` | Ends the shared conversation as a server-side transaction; requires the service's `conversation:close` permission |
@@ -370,9 +374,36 @@ pairing. Other errors are recoverable only according to their explicit code.
 }
 ```
 
-`content` is an ordered array from day one.  V1 renders and sends only
-`text`; future items may include `image`, `file`, `citation`, or structured UI
-references without breaking the message envelope.
+`content` is an ordered array. V1 sends only `text`, but renders both `text`
+and a read-only `image` item in their given order. Markdown is interpreted only
+for `text` items; HTML-looking text remains plain text.
+
+```json
+{
+  "type": "image",
+  "url": "https://agent.example.com/v1/baton/media/img_01J...",
+  "mime_type": "image/png",
+  "width": 1600,
+  "height": 900,
+  "alt": "销售趋势图"
+}
+```
+
+`url` is an absolute HTTP(S) URL on the exact same origin as the Conversation
+endpoint. It carries no credential. Baton fetches it with the Conversation
+Bearer token, follows no redirects, and rejects a cross-origin, malformed, or
+redirected result. V1 supports only one static JPEG, PNG, or WebP image per
+item (`image/jpeg`, `image/png`, `image/webp`); the response `Content-Type`
+must exactly match `mime_type`. Servers must limit each response to 12 MiB and
+25 million decoded pixels or less; clients enforce the same limits and reject
+animated or invalid data. Image bytes must not be included in snapshot/SSE JSON,
+Keychain, logs, or a client-created message. Unknown or malformed content items
+are shown as unsupported content without treating their fields as executable or
+markup.
+
+`message.delta` is valid only for a `streaming` assistant message whose
+`content` contains exactly one trailing `text` item. A streaming message cannot
+contain an `image`; servers add images only in a completed `message.created`.
 
 ### Required event envelope
 
@@ -419,9 +450,11 @@ and multimodal content.
 The discovery document's `capabilities` object is the only V1 capability
 surface. It declares what this server accepts or emits for this Conversation;
 it is not a request for device capabilities and it does not grant permission.
-`text: true` is mandatory. `markdown` and `streaming` may be declared when
-implemented. The iOS app is voice-capable by local product design, but it does
-not advertise that fact on the wire in V1.
+`text: true` is mandatory. `markdown`, `streaming`, and `image` may be declared
+when implemented. `image` covers only server-to-client static-image display;
+it is neither an upload capability nor a device permission. The iOS app is
+voice-capable by local product design, but it does not advertise that fact on
+the wire in V1.
 
 Bidirectional capability negotiation, per-device capabilities, and future keys
 such as `camera`, `file`, `approval`, `location`, and `notification` are

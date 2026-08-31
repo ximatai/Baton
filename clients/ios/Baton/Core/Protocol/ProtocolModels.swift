@@ -8,6 +8,30 @@ struct PairingEndpoints: Codable, Equatable {
     let conversation: URL
 }
 
+/// Server-declared Conversation behavior. This is discovery metadata, not a
+/// device permission or a request for the phone to enable a capability.
+struct BatonCapabilities: Codable, Equatable {
+    let text: Bool
+    let markdown: Bool
+    let streaming: Bool
+    let image: Bool
+
+    init(text: Bool = true, markdown: Bool = false, streaming: Bool = false, image: Bool = false) {
+        self.text = text
+        self.markdown = markdown
+        self.streaming = streaming
+        self.image = image
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        text = try container.decodeIfPresent(Bool.self, forKey: .text) ?? false
+        markdown = try container.decodeIfPresent(Bool.self, forKey: .markdown) ?? false
+        streaming = try container.decodeIfPresent(Bool.self, forKey: .streaming) ?? false
+        image = try container.decodeIfPresent(Bool.self, forKey: .image) ?? false
+    }
+}
+
 enum PairingApprovalMode: String, Codable, Equatable {
     case manual
     case auto
@@ -20,6 +44,7 @@ struct PairingDocument: Codable, Equatable {
     let service: ServiceDescriptor
     let conversation: ConversationDescriptor
     let endpoints: PairingEndpoints
+    let capabilities: BatonCapabilities
     /// Absent on pre-policy services; manual preserves the original V1 behavior.
     let approvalMode: PairingApprovalMode
 
@@ -27,7 +52,7 @@ struct PairingDocument: Codable, Equatable {
         case protocolVersion = "protocol"
         case pairingID = "pairing_id"
         case expiresAt = "expires_at"
-        case service, conversation, endpoints
+        case service, conversation, endpoints, capabilities
         case approvalMode = "approval_mode"
     }
 
@@ -39,6 +64,10 @@ struct PairingDocument: Codable, Equatable {
         service = try container.decode(ServiceDescriptor.self, forKey: .service)
         conversation = try container.decode(ConversationDescriptor.self, forKey: .conversation)
         endpoints = try container.decode(PairingEndpoints.self, forKey: .endpoints)
+        capabilities = try container.decode(BatonCapabilities.self, forKey: .capabilities)
+        guard capabilities.text else {
+            throw DecodingError.dataCorruptedError(forKey: .capabilities, in: container, debugDescription: "Baton requires capabilities.text to be true.")
+        }
         approvalMode = try container.decodeIfPresent(PairingApprovalMode.self, forKey: .approvalMode) ?? .manual
     }
 
@@ -50,16 +79,110 @@ struct PairingDocument: Codable, Equatable {
         try container.encode(service, forKey: .service)
         try container.encode(conversation, forKey: .conversation)
         try container.encode(endpoints, forKey: .endpoints)
+        try container.encode(capabilities, forKey: .capabilities)
         try container.encode(approvalMode, forKey: .approvalMode)
     }
 }
-struct MessageContent: Codable, Equatable { let type: String; let text: String? }
+
+struct MessageImage: Codable, Equatable, Identifiable {
+    let url: URL
+    let mimeType: String
+    let width: Int
+    let height: Int
+    let alt: String
+
+    var id: URL { url }
+
+    enum CodingKeys: String, CodingKey {
+        case url, width, height, alt
+        case mimeType = "mime_type"
+    }
+
+    var isPlausible: Bool {
+        BatonImageFormat.isSupported(mimeType) && width > 0 && height > 0
+    }
+}
+
+/// Ordered Conversation content. Unknown items stay explicit rather than being
+/// silently coerced to text, so future server content cannot run as markup or
+/// be mistaken for a supported image.
+enum MessageContent: Codable, Equatable {
+    case text(String)
+    case image(MessageImage)
+    case unsupported(type: String, alt: String?)
+
+    private enum CodingKeys: String, CodingKey { case type, text, url, mimeType = "mime_type", width, height, alt }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(String.self, forKey: .type)
+        switch type {
+        case "text":
+            self = .text(try container.decode(String.self, forKey: .text))
+        case "image":
+            guard let image = try? MessageImage(from: decoder), image.isPlausible,
+                  BatonTransportPolicy.permits(image.url), image.url.user == nil, image.url.password == nil else {
+                self = .unsupported(type: type, alt: try? container.decodeIfPresent(String.self, forKey: .alt))
+                return
+            }
+            self = .image(image)
+        default:
+            self = .unsupported(type: type, alt: try? container.decodeIfPresent(String.self, forKey: .alt))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case let .text(text):
+            try container.encode("text", forKey: .type)
+            try container.encode(text, forKey: .text)
+        case let .image(image):
+            try container.encode("image", forKey: .type)
+            try container.encode(image.url, forKey: .url)
+            try container.encode(image.mimeType, forKey: .mimeType)
+            try container.encode(image.width, forKey: .width)
+            try container.encode(image.height, forKey: .height)
+            try container.encode(image.alt, forKey: .alt)
+        case let .unsupported(type, alt):
+            try container.encode(type, forKey: .type)
+            try container.encodeIfPresent(alt, forKey: .alt)
+        }
+    }
+
+    var text: String? {
+        guard case let .text(text) = self else { return nil }
+        return text
+    }
+
+    var image: MessageImage? {
+        guard case let .image(image) = self else { return nil }
+        return image
+    }
+}
+
+enum BatonImageFormat {
+    static let supportedMIMETypes: Set<String> = ["image/jpeg", "image/png", "image/webp"]
+
+    static func isSupported(_ mimeType: String) -> Bool {
+        supportedMIMETypes.contains(mimeType.lowercased())
+    }
+}
+
 enum MessageRole: String, Codable { case user, assistant }
 struct ConversationMessage: Codable, Identifiable, Equatable {
     let id: String; let clientMessageID: String?; let conversationID: String; let role: MessageRole; var content: [MessageContent]; let createdAt: String; var status: String
     enum CodingKeys: String, CodingKey { case id, role, content, status; case clientMessageID = "client_message_id"; case conversationID = "conversation_id"; case createdAt = "created_at" }
     var text: String { content.compactMap(\.text).joined() }
-    mutating func append(delta: String) { if content.isEmpty { content = [MessageContent(type: "text", text: delta)] } else { content[0] = MessageContent(type: content[0].type, text: (content[0].text ?? "") + delta) } }
+    var isValidStreamingContent: Bool {
+        status != "streaming" || (role == .assistant && content.count == 1 && content[0].text != nil)
+    }
+
+    mutating func appendStreamingDelta(_ delta: String) -> Bool {
+        guard role == .assistant, status == "streaming", content.count == 1, let text = content[0].text else { return false }
+        content[0] = .text(text + delta)
+        return true
+    }
 }
 struct EventCursor: Codable, Equatable {
     let id: String

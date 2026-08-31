@@ -1,10 +1,15 @@
 import Foundation
+import ImageIO
+import UIKit
+import Combine
+import UniformTypeIdentifiers
 
 enum CompanionAPIError: LocalizedError {
     case invalidPairingURL
     case insecureEndpoint(URL)
     case endpointOriginMismatch
     case invalidResponse
+    case invalidImage
     case server(status: Int, code: String?, message: String)
 
     var errorDescription: String? {
@@ -13,6 +18,7 @@ enum CompanionAPIError: LocalizedError {
         case .insecureEndpoint: return String(localized: "服务地址必须是完整的 HTTP 或 HTTPS URL。")
         case .endpointOriginMismatch: return String(localized: "服务端端点与 Pairing URL 不属于同一来源。")
         case .invalidResponse: return String(localized: "服务端响应格式无效。")
+        case .invalidImage: return String(localized: "图片格式或大小不受支持。")
         case .server(let status, let code, let message):
             if status == 410 || code == "pairing_expired" { return String(localized: "二维码配对已过期，请重新扫码。") }
             if code == "invalid_device_proof" { return String(localized: "此设备无法领取该配对凭据，请重新扫码。") }
@@ -102,7 +108,41 @@ struct BatonAPIClient: Sendable {
 
     func send(endpoint: URL, token: String, text: String, clientMessageID: UUID) async throws -> ConversationMessage {
         struct SendBody: Encodable { let clientMessageID: String; let content: [MessageContent]; enum CodingKeys: String, CodingKey { case clientMessageID = "client_message_id", content } }
-        return try await request(url: endpoint.appending(path: "messages"), method: "POST", token: token, body: SendBody(clientMessageID: clientMessageID.uuidString, content: [MessageContent(type: "text", text: text)]))
+        return try await request(url: endpoint.appending(path: "messages"), method: "POST", token: token, body: SendBody(clientMessageID: clientMessageID.uuidString, content: [.text(text)]))
+    }
+
+    /// Downloads a server-provided image through the same authenticated,
+    /// same-origin boundary as the Conversation itself. Image bytes are never
+    /// persisted with credentials or logged.
+    func imageData(for image: MessageImage, endpoint: URL, token: String) async throws -> Data {
+        guard image.isPlausible, image.url.user == nil, image.url.password == nil else { throw CompanionAPIError.invalidImage }
+        try validateSameOrigin(endpoint, image.url)
+        var request = URLRequest(url: image.url)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(image.mimeType, forHTTPHeaderField: "Accept")
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else { throw CompanionAPIError.invalidResponse }
+        let isSuccess = (200...299).contains(http.statusCode)
+        let byteLimit = isSuccess ? BatonImageLimits.maximumBytes : 32_768
+        var data = Data()
+        for try await byte in bytes.prefix(byteLimit + 1) {
+            data.append(byte)
+            if data.count > byteLimit {
+                throw isSuccess ? CompanionAPIError.invalidImage : CompanionAPIError.invalidResponse
+            }
+        }
+        guard isSuccess else { throw decodeServerError(status: http.statusCode, data: data) }
+        let responseMIMEType = http.value(forHTTPHeaderField: "Content-Type")?
+            .split(separator: ";", maxSplits: 1).first?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard data.count <= BatonImageLimits.maximumBytes,
+              let responseMIMEType,
+              BatonImageFormat.isSupported(responseMIMEType),
+              responseMIMEType == image.mimeType.lowercased() else {
+            throw CompanionAPIError.invalidImage
+        }
+        return data
     }
 
     func cancel(endpoint: URL, token: String, runID: String) async throws {
@@ -215,6 +255,86 @@ struct BatonAPIClient: Sendable {
         var data = Data()
         for try await byte in bytes.prefix(32_768) { data.append(byte) }
         return decodeServerError(status: response.statusCode, data: data)
+    }
+}
+
+enum BatonImageLimits {
+    static let maximumBytes = 12 * 1_024 * 1_024
+    static let maximumPixels = 25_000_000
+    static let thumbnailMaxPixelSize = 1_600
+    static let cacheTotalCostLimit = 80 * 1_024 * 1_024
+}
+
+@MainActor
+final class BatonImageLoader: ObservableObject {
+    private let endpoint: URL
+    private let token: String
+    private let api: BatonAPIClient
+    private let onTerminalFailure: @MainActor () -> Void
+    private let cache = NSCache<NSURL, UIImage>()
+
+    init(endpoint: URL, token: String, onTerminalFailure: @escaping @MainActor () -> Void = {}) {
+        self.endpoint = endpoint
+        self.token = token
+        self.api = BatonAPIClient()
+        self.onTerminalFailure = onTerminalFailure
+        cache.countLimit = 40
+        cache.totalCostLimit = BatonImageLimits.cacheTotalCostLimit
+    }
+
+    init(endpoint: URL, token: String, api: BatonAPIClient, onTerminalFailure: @escaping @MainActor () -> Void = {}) {
+        self.endpoint = endpoint
+        self.token = token
+        self.api = api
+        self.onTerminalFailure = onTerminalFailure
+        cache.countLimit = 40
+        cache.totalCostLimit = BatonImageLimits.cacheTotalCostLimit
+    }
+
+    func image(for content: MessageImage) async throws -> UIImage {
+        if let cached = cache.object(forKey: content.url as NSURL) { return cached }
+        do {
+            let data = try await api.imageData(for: content, endpoint: endpoint, token: token)
+            let image = try Self.decodeStaticImage(data, declaredMIMEType: content.mimeType)
+            let cost = image.cgImage.map { $0.bytesPerRow.multipliedReportingOverflow(by: $0.height) }.flatMap { $0.overflow ? nil : $0.partialValue } ?? BatonImageLimits.cacheTotalCostLimit
+            cache.setObject(image, forKey: content.url as NSURL, cost: min(cost, BatonImageLimits.cacheTotalCostLimit))
+            return image
+        } catch {
+            if (error as? CompanionAPIError)?.invalidatesSessionCredential == true { onTerminalFailure() }
+            throw error
+        }
+    }
+
+    static func decodeStaticImage(_ data: Data, declaredMIMEType: String) throws -> UIImage {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              CGImageSourceGetCount(source) == 1,
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? NSNumber,
+              let height = properties[kCGImagePropertyPixelHeight] as? NSNumber,
+              sourceMatchesDeclaredMIMEType(source, declaredMIMEType) else {
+            throw CompanionAPIError.invalidImage
+        }
+        let multiplied = width.intValue.multipliedReportingOverflow(by: height.intValue)
+        guard width.intValue > 0, height.intValue > 0, !multiplied.overflow,
+              multiplied.partialValue <= BatonImageLimits.maximumPixels,
+              let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceThumbnailMaxPixelSize: BatonImageLimits.thumbnailMaxPixelSize,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+              ] as CFDictionary) else {
+            throw CompanionAPIError.invalidImage
+        }
+        return UIImage(cgImage: thumbnail)
+    }
+
+    private static func sourceMatchesDeclaredMIMEType(_ source: CGImageSource, _ mimeType: String) -> Bool {
+        guard let identifier = CGImageSourceGetType(source) as String? else { return false }
+        switch mimeType.lowercased() {
+        case "image/jpeg": return identifier == UTType.jpeg.identifier
+        case "image/png": return identifier == UTType.png.identifier
+        case "image/webp": return identifier == "org.webmproject.webp"
+        default: return false
+        }
     }
 }
 

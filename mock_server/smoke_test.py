@@ -84,6 +84,7 @@ pair = create_pairing()
 pairing_id = pair["pairing_id"]
 status, discovery = request("/.well-known/baton/pair/" + pairing_id)
 assert status == 200 and discovery["conversation"]["id"].startswith("conv_") and "join" in discovery["endpoints"]
+assert discovery["capabilities"] == {"text": True, "markdown": True, "streaming": True, "image": True}
 CONVERSATION_ID = discovery["conversation"]["id"]
 status, denied = request(f"/v1/baton/conversations/{CONVERSATION_ID}")
 assert status == 401 and denied["error"]["code"] == "invalid_token"
@@ -135,6 +136,16 @@ assert status == 200 and auto_credential["status"] == "approved" and auto_creden
 # The granted token can now use the normal conversation API and retains send idempotency.
 status, snapshot = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=token)
 assert status == 200 and snapshot["messages"] and snapshot["event_cursor"]["id"]
+welcome_image = next(part for message in snapshot["messages"] for part in message["content"] if part["type"] == "image")
+assert welcome_image["mime_type"] == "image/png" and welcome_image["width"] == 320 and welcome_image["height"] == 200
+assert welcome_image["alt"] == "蓝色渐变的本地 Mock 图表示例"
+image_url, origin = urlparse(welcome_image["url"]), urlparse(BASE)
+assert (image_url.scheme, image_url.netloc) == (origin.scheme, origin.netloc)
+image_request = urllib.request.Request(welcome_image["url"], headers={"Authorization": "Bearer " + token, "Accept": "image/png"})
+with urllib.request.urlopen(image_request, timeout=3) as image_response:
+    image_bytes = image_response.read()
+    assert image_response.status == 200 and image_response.headers.get_content_type() == "image/png"
+assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n") and len(image_bytes) < 12 * 1024 * 1024
 client_id = str(uuid.uuid4())
 payload = {"client_message_id": client_id, "content": [{"type": "text", "text": "hello"}]}
 status, first = request(f"/v1/baton/conversations/{CONVERSATION_ID}/messages", "POST", payload, token)

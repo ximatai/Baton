@@ -9,11 +9,14 @@ struct ConversationEventReducer: Equatable {
     private var seenOrder: [String] = []
     private let maxSeenEvents = 512
 
-    mutating func replaceSnapshot(_ snapshot: ConversationSnapshot) {
+    @discardableResult
+    mutating func replaceSnapshot(_ snapshot: ConversationSnapshot) -> Bool {
+        guard snapshot.messages.allSatisfy(\.isValidStreamingContent) else { return false }
         messages = snapshot.messages.sorted { $0.createdAt < $1.createdAt }
         cursor = snapshot.eventCursor
         seenEventIDs.removeAll(keepingCapacity: true)
         seenOrder.removeAll(keepingCapacity: true)
+        return true
     }
 
     /// Returns true when the server asks the caller to obtain a fresh atomic
@@ -33,13 +36,11 @@ struct ConversationEventReducer: Equatable {
 
         switch event.type {
         case "message.created":
-            if let message = decodeMessage(event.data) { mergeMessage(message) }
+            guard let message = decodeMessage(event.data), message.isValidStreamingContent else { return true }
+            mergeMessage(message)
         case "message.delta":
             guard let data = event.data.object, let id = data["message_id"]?.string, let delta = data["delta"]?.string else { break }
-            if let index = messages.firstIndex(where: { $0.id == id }) { messages[index].append(delta: delta) }
-            else {
-                messages.append(ConversationMessage(id: id, clientMessageID: nil, conversationID: "", role: .assistant, content: [MessageContent(type: "text", text: delta)], createdAt: ISO8601DateFormatter().string(from: Date()), status: "streaming"))
-            }
+            guard let index = messages.firstIndex(where: { $0.id == id }), messages[index].appendStreamingDelta(delta) else { return true }
         case "message.completed":
             if let id = event.data.object?["message_id"]?.string, let index = messages.firstIndex(where: { $0.id == id }) {
                 messages[index].status = event.data.object?["status"]?.string ?? "completed"

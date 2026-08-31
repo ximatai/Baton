@@ -19,7 +19,8 @@ Baton 的本地 Python 服务是协议测试靶场，不是生产后端；Java �
 
 Discovery document 内的 `capabilities` 只是服务端对当前 Conversation
 的能力声明，不是设备协商、也不授予权限。`text: true` 为 V1 必填；
-`markdown`、`streaming` 仅在服务真正支持时声明。iOS 的本地语音能力
+`markdown`、`streaming`、`image` 仅在服务真正支持时声明。`image` 只表示
+服务会下发可读取的静态图片内容项，不是上传协商或设备权限。iOS 的本地语音能力
 不需要也不应在 V1 回传。未来若要支持 camera/file/approval 等双向能力，
 必须另行定义协商、授权与降级语义，不能把未知字段视为已经协商成功。
 
@@ -55,12 +56,17 @@ Java 服务应使 `manual` approval 具有服务端授权检查和一次性状�
 | 决定 pairing | `POST /v1/baton/pairings/{id}/approval` | Web；仅 manual，现有登录和 CSRF 保护下提交 `{ "decision": "approved"\|"rejected" }` | 无效决定 `400 invalid_decision`；非 pending/auto `409 pairing_not_pending`；未登录/无权由现有 Web 授权层拒绝 |
 | 快照 | `GET /v1/baton/conversations/{id}` | Baton；Bearer token；原子返回元数据、有上限的初始历史、可选 `active_runs` 和 `event_cursor`，缓存不是事实源 | 无/错 token `401 invalid_token`；未知 Conversation `404 conversation_not_found` |
 | 发送 | `POST /v1/baton/conversations/{id}/messages` | Baton；Bearer token；文本消息必须含 UUID `client_message_id`；相同 id 重试返回原消息，不重复创建 | `401 invalid_token`、`404 conversation_not_found`、`400 invalid_message` |
+| 读取图片 | `GET image.url` | Baton；Bearer token；仅读取消息 `content[]` 中同源的静态图片 | `401 invalid_token`、`404` 或服务定义的媒体错误 |
 | 事件流 | `GET /v1/baton/conversations/{id}/events` | Baton；Bearer token 的 SSE；将 snapshot 的 `event_cursor.id` 放入 `Last-Event-ID` 恢复 | `401 invalid_token`、`404 conversation_not_found`；游标不可恢复时发送 `conversation.resync` |
 | 停止 | `POST /v1/baton/conversations/{id}/runs/{runId}:cancel` | Baton；Bearer token；异步请求取消活动 run；仅 `run.cancelled` 代表终态 | `401 invalid_token`、`404 run_not_found` |
 | 结束对话 | `POST /v1/baton/conversations/{id}:end` | Web 或 Baton；Bearer/现有 Web 会话均须有服务自身 `conversation:close` 权限，且带 `Idempotency-Key` UUID；服务端原子结束共享 Conversation | 无权 `403 conversation_close_forbidden`；未知 `404 conversation_not_found`；同 key 重试 `200` 原结果 |
 | 断开/撤销 | `DELETE /v1/baton/devices/{deviceId}/sessions/{id}` | Baton；Bearer token；撤销该设备会话并立即阻止后续访问 | `401 invalid_token`；未知资源按服务现有错误映射 |
 
 发送响应首创消息时为 `201`，幂等重试为 `200`。快照与 `event_cursor` 必须由同一个事务/锁内读取：`event_cursor` 至少含 `{ "id": "evt_…", "sequence": 487 }`，并表示该快照已包含的最后一个事件位置。iOS 随后以此 `id` 打开 SSE，服务只回放 sequence 更大的已持久化 envelope。没有 `Last-Event-ID` 的新订阅从当前 tail 开始，不得暗中把整段事件历史推送给客户端。
+
+## 服务端图片内容
+
+服务可在按时间顺序的消息 `content[]` 中下发 `{ "type": "image", "url", "mime_type", "width", "height", "alt" }`，并在 discovery 声明 `"image": true`。`url` 必须是与 Conversation endpoint 精确同源的绝对 HTTP(S) URL，不得包含 token；Baton 会带现有 Bearer header 请求它且拒绝重定向。只支持静态 `image/jpeg`、`image/png`、`image/webp`，响应 MIME 必须与 `mime_type` 一致，单项不超过 12 MiB / 2500 万解码像素。不得把图片 bytes 写入 snapshot、SSE、日志或 `content` JSON，也不得借此增加上传、文件或外链图床接口。
 
 Join 响应里的 `poll_url` 必须是完整的绝对 URL（含 scheme 和 host），与 discovery / join 的**服务对外 origin** 完全相同，并可由发起请求的 iPhone 直接访问；不得返回 `/v1/...` 这样的相对路径。它只可含 request id，不能含 token 或 `device_proof`，领取仍需 `X-Baton-Device-Proof`。在反向代理或 TLS 终止之后，Java 服务必须使用受信任部署配置确定 canonical external origin（包括所选的 `http` 或 `https` scheme），不能直接信任任意 `Host` 或 `X-Forwarded-*` 请求头来拼 URL。相对、跨 origin 或不可访问的 `poll_url` 是契约失败，Baton 会在 join 阶段拒绝它。
 
@@ -137,4 +143,4 @@ cancel 的 `202 cancellation_requested` 只代表服务已接受请求；执行�
 
 ## V1 暂缓
 
-不因 Java 接入提前实现图片/相机/文件、Agent action approval（区别于网页确认设备 pairing）、Tool UI、generated UI、location、Face ID confirmation、push notification、WebSocket、账户体系或 Java SDK。能力声明可保留未来扩展键，但服务和 iOS V1 只依赖 `text`、`markdown`、`streaming` 及设备端 `on_device_speech_to_text`。
+不因 Java 接入提前实现图片上传、相机/文件、Agent action approval（区别于网页确认设备 pairing）、Tool UI、generated UI、location、Face ID confirmation、push notification、WebSocket、账户体系或 Java SDK。除已定义的只读静态 `image` 外，能力声明可保留未来扩展键；服务和 iOS V1 只依赖 `text`、`markdown`、`streaming`、`image` 及设备端 `on_device_speech_to_text`。
