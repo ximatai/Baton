@@ -32,7 +32,7 @@ enum KeychainStore {
     @discardableResult
     static func removeConversation(conversationKey: String) throws -> [StoredConversationSession] {
         let sessions = ConversationSessionIndex.removing(conversationKey: conversationKey, from: try loadSessions())
-        if sessions.isEmpty { delete(account: sessionsAccount) }
+        if sessions.isEmpty { try deleteRequired(account: sessionsAccount) }
         else { try save(sessions, account: sessionsAccount) }
         return sessions
     }
@@ -146,6 +146,16 @@ enum KeychainStore {
 
     private static func delete(account: String) {
         SecItemDelete(baseQuery(account: account) as CFDictionary)
+    }
+
+    /// Session credentials are security-sensitive. Treat a failed deletion as
+    /// a failed local disconnect rather than falsely clearing the UI state.
+    /// `errSecItemNotFound` is safe because no credential remains to delete.
+    private static func deleteRequired(account: String) throws {
+        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else {
+            throw KeychainError.unexpectedStatus(status)
+        }
     }
 
     private static func baseQuery(account: String) -> [String: Any] {

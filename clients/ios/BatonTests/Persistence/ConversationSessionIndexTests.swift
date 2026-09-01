@@ -118,7 +118,9 @@ struct ConversationSessionIndexTests {
             in: [StoredConversationSession(credential: original), StoredConversationSession(credential: other)]
         )
         #expect(ConversationSessionSummary(renamed.first { $0.id == original.conversationKey }!).displayTitle == "现场设备")
+        #expect(ConversationSessionSummary(renamed.first { $0.id == original.conversationKey }!).localTitle == "现场设备")
         #expect(ConversationSessionSummary(renamed.first { $0.id == other.conversationKey }!).displayTitle == other.conversation.title)
+        #expect(ConversationSessionSummary(renamed.first { $0.id == other.conversationKey }!).localTitle == nil)
 
         let replacement = credential(sessionID: "session_3", conversationID: "conv_1")
         let updated = ConversationSessionIndex.upserting(replacement, into: renamed)

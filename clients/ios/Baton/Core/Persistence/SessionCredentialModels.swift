@@ -178,6 +178,7 @@ struct ConversationSessionSummary: Equatable, Identifiable {
     let lastSuccessfulSyncAt: Date?
     let hasUnreadUpdates: Bool
     let displayTitle: String
+    let localTitle: String?
     let isPinned: Bool
 
     init(_ stored: StoredConversationSession) {
@@ -187,6 +188,7 @@ struct ConversationSessionSummary: Equatable, Identifiable {
         lastActivatedAt = stored.lastActivatedAt
         lastSuccessfulSyncAt = stored.lastSuccessfulSyncAt
         displayTitle = stored.localTitle ?? stored.credential.conversation.title
+        localTitle = stored.localTitle
         isPinned = stored.isPinned
         if let lastReadCursor = stored.lastReadCursor,
            let latestObservedCursor = stored.latestObservedCursor {

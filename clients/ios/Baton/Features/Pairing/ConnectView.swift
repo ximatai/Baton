@@ -101,6 +101,17 @@ struct ConnectView: View {
         } message: {
             Text("仅修改该对话在这台 iPhone 上的展示名称。")
         }
+        .alert(
+            "操作未完成",
+            isPresented: Binding(
+                get: { model.sessionActionError != nil },
+                set: { if !$0 { model.dismissSessionActionError() } }
+            )
+        ) {
+            Button("知道了", role: .cancel) { model.dismissSessionActionError() }
+        } message: {
+            Text(model.sessionActionError ?? "")
+        }
     }
 
     private var emptyState: some View {

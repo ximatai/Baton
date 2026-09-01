@@ -67,6 +67,9 @@ final class BatonViewModel: ObservableObject {
     /// connection; summaries intentionally contain no session credential.
     @Published private(set) var savedSessions: [ConversationSessionSummary] = []
     @Published private(set) var sessionAvailability: [String: ConversationAvailability] = [:]
+    /// Failures from explicit list operations belong to the affected local
+    /// action, not to the whole Conversation list or connection state.
+    @Published private(set) var sessionActionError: String?
     /// The selected conversation's Keychain-backed outbox, with in-memory
     /// delivery state. No message content is duplicated outside Keychain.
     @Published private(set) var pendingOutbox: [OutboxItemPresentation] = []
@@ -115,7 +118,10 @@ final class BatonViewModel: ObservableObject {
     var canEndActiveConversation: Bool { credential?.canEndConversation == true }
     var activeConversationTitle: String {
         guard let credential else { return conversation?.title ?? "Baton" }
-        return savedSessions.first(where: { $0.id == credential.conversationKey })?.displayTitle ?? conversation?.title ?? "Baton"
+        if let localTitle = savedSessions.first(where: { $0.id == credential.conversationKey })?.localTitle {
+            return localTitle
+        }
+        return conversation?.title ?? credential.conversation.title
     }
 
     init() {
@@ -356,15 +362,21 @@ final class BatonViewModel: ObservableObject {
     }
 
     func disconnectSavedSession(id: String) {
+        sessionActionError = nil
+        errorMessage = nil
         do {
             guard let session = try KeychainStore.loadSessions().first(where: { $0.id == id }) else { return }
             // This is a device-data operation first. A dead server must not
             // keep credentials, durable history, media, or outbox items on
             // the phone or keep the entry visible in its local list.
-            guard removeSavedSessionLocally(session.credential) else { return }
+            guard removeSavedSessionLocally(session.credential) else {
+                sessionActionError = errorMessage ?? String(localized: "本地会话清理失败")
+                errorMessage = nil
+                return
+            }
             revokeRemoteSessionBestEffort(session.credential)
         } catch {
-            errorMessage = error.localizedDescription
+            sessionActionError = error.localizedDescription
         }
     }
 
@@ -388,25 +400,31 @@ final class BatonViewModel: ObservableObject {
     }
 
     func renameSavedSession(id: String, title: String) {
+        sessionActionError = nil
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             guard let session = try KeychainStore.loadSessions().first(where: { $0.id == id }) else { return }
             let localTitle = trimmed.isEmpty || trimmed == session.credential.conversation.title ? nil : trimmed
             updateSavedSessions(try KeychainStore.renameConversationLocally(conversationKey: id, title: localTitle))
         } catch {
-            errorMessage = error.localizedDescription
+            sessionActionError = error.localizedDescription
         }
     }
 
     func setSavedSessionPinned(id: String, pinned: Bool) {
+        sessionActionError = nil
         do {
             updateSavedSessions(try KeychainStore.setConversationPinnedLocally(
                 conversationKey: id,
                 pinned: pinned
             ))
         } catch {
-            errorMessage = error.localizedDescription
+            sessionActionError = error.localizedDescription
         }
+    }
+
+    func dismissSessionActionError() {
+        sessionActionError = nil
     }
 
     func retryLastConnection() {
@@ -1081,7 +1099,7 @@ final class BatonViewModel: ObservableObject {
             // The same Conversation can be paired again with a replacement
             // device session while an earlier request is still in flight.
             guard saved.credential == session else { return nil }
-            try ConversationLocalStore(credential: session).removeAll()
+            try ConversationLocalStore(credential: session).invalidateAndRemoveAll()
             updateSavedSessions(try KeychainStore.removeConversation(conversationKey: session.conversationKey))
             let retainedOutbox = try KeychainStore.loadOutbox().filter { !$0.belongs(toConversationOf: session) }
             try KeychainStore.saveOutbox(retainedOutbox)
