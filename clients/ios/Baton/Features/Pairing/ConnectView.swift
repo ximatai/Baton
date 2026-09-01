@@ -138,7 +138,15 @@ struct ConnectView: View {
                 .foregroundStyle(Color.secondary)
                 .font(.title3)
             VStack(alignment: .leading, spacing: 3) {
-                Text(session.conversation.title).lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(session.conversation.title).lineLimit(1)
+                    if session.hasUnreadUpdates {
+                        Circle()
+                            .fill(Color.accentColor)
+                            .frame(width: 8, height: 8)
+                            .accessibilityLabel("有更新")
+                    }
+                }
                 Text(session.service.name)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -151,6 +159,7 @@ struct ConnectView: View {
 
     private func accessibilityLabel(for session: ConversationSessionSummary) -> String {
         var result = "\(session.conversation.title)，\(session.service.name)"
+        if session.hasUnreadUpdates { result += "，有更新" }
         switch model.availability(for: session.id) {
         case .checking: result += "，正在检查可用性"
         case .available: result += "，可用"

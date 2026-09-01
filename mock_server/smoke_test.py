@@ -150,7 +150,7 @@ image_request = urllib.request.Request(welcome_image["url"], headers={"Authoriza
 with urllib.request.urlopen(image_request, timeout=3) as image_response:
     image_bytes = image_response.read()
     assert image_response.status == 200 and image_response.headers.get_content_type() == "image/png"
-    assert image_response.headers.get("Cache-Control") == "private, no-store"
+assert image_response.headers.get("Cache-Control") == "private, no-store"
 assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n") and len(image_bytes) < 12 * 1024 * 1024
 client_id = str(uuid.uuid4())
 payload = {"client_message_id": client_id, "content": [{"type": "text", "text": "hello"}]}

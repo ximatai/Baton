@@ -36,7 +36,9 @@ enum ConversationAvailability: Equatable {
 }
 
 private enum SessionAvailabilityProbe {
-    case available
+    /// This cursor is only a list observation; it never advances the user's
+    /// read boundary.
+    case available(EventCursor)
     case unavailable
     /// A response which proves that this locally held credential or
     /// conversation can no longer be used. Unlike a transport failure, it
@@ -75,6 +77,9 @@ final class BatonViewModel: ObservableObject {
     private let api = BatonAPIClient()
     private let speechInput = SpeechInputService()
     private var credential: SessionCredential?
+    /// Snapshot work is separate from SSE and must share its lifecycle: a
+    /// suspended conversation cannot become read when an old response lands.
+    private var snapshotTask: Task<Void, Never>?
     private var streamTask: Task<Void, Never>?
     private var pairingPollTask: Task<Void, Never>?
     private var pendingPairing: PendingPairingCredential?
@@ -83,6 +88,8 @@ final class BatonViewModel: ObservableObject {
     private var shouldMaintainConnection = false
     private var reconnectAttempt = 0
     private var outboxRetryTask: Task<Void, Never>?
+    private var mediaPrefetchTask: Task<Void, Never>?
+    private var cacheRestoreTask: Task<Void, Never>?
     private var outboxStates: [String: OutboxDeliveryState] = [:]
     /// A persisted request may have one active delivery chain at most. This
     /// prevents an explicit retry and connection flush from POSTing together.
@@ -280,8 +287,12 @@ final class BatonViewModel: ObservableObject {
     func suspendActiveConversation() {
         guard credential != nil else { return }
         shouldMaintainConnection = false
+        snapshotTask?.cancel(); snapshotTask = nil
         streamTask?.cancel(); streamTask = nil
         outboxRetryTask?.cancel(); outboxRetryTask = nil
+        mediaPrefetchTask?.cancel(); mediaPrefetchTask = nil
+        cacheRestoreTask?.cancel(); cacheRestoreTask = nil
+        imageLoader?.invalidate()
         activeRunID = nil
         agentActivity = .idle
         isBusy = false
@@ -417,7 +428,7 @@ final class BatonViewModel: ObservableObject {
 
     func disconnect() {
         guard let credential else { cancelPendingPairing(); return }
-        shouldMaintainConnection = false; streamTask?.cancel(); streamTask = nil
+        shouldMaintainConnection = false; snapshotTask?.cancel(); snapshotTask = nil; streamTask?.cancel(); streamTask = nil
         isConnected = false; connectionStatus = String(localized: "正在撤销服务器会话…"); errorMessage = nil
         Task {
             do {
@@ -447,18 +458,20 @@ final class BatonViewModel: ObservableObject {
     private func refreshAndStream(resetBackoff: Bool = true) {
         guard let credential else { return }
         if resetBackoff { reconnectAttempt = 0 }
+        snapshotTask?.cancel(); snapshotTask = nil
         streamTask?.cancel(); isBusy = true; connectionStatus = String(localized: "正在同步会话…"); isConnected = false; errorMessage = nil
-        Task {
+        snapshotTask = Task { [weak self] in
+            guard let self else { return }
             do {
-                guard try await loadSnapshot(using: credential) else { return }
-                startEventStream(using: credential)
-            } catch { handleSessionFailure(error, for: credential) }
+                guard try await self.loadSnapshot(using: credential) else { return }
+                self.startEventStream(using: credential)
+            } catch { self.handleSessionFailure(error, for: credential) }
         }
     }
 
     private func loadSnapshot(using credential: SessionCredential) async throws -> Bool {
         let snapshot = try await api.snapshot(endpoint: credential.conversationEndpoint, token: credential.accessToken)
-        guard credential == self.credential else { return false }
+        guard acceptsActiveSnapshot(for: credential) else { return false }
         // A same-origin proxy must not be able to substitute a different
         // conversation for the credential selected by the user.
         guard credential.ownsConversation(id: snapshot.id) else {
@@ -467,14 +480,34 @@ final class BatonViewModel: ObservableObject {
         // These assignments are intentionally adjacent on MainActor: the event
         // cursor and message list describe the same server-side instant.
         guard reducer.replaceSnapshot(snapshot) else { throw CompanionAPIError.invalidResponse }
+        // URLSession cancellation is cooperative. Check the ownership boundary
+        // again immediately before mutable UI/Keychain state is touched.
+        guard acceptsActiveSnapshot(for: credential) else { return false }
         messages = reducer.messages
         conversation = ConversationDescriptor(id: snapshot.id, title: snapshot.title, agentName: snapshot.agentName)
         restoreActiveRun(from: snapshot)
+        // An accepted snapshot is the sole persistent read boundary. In
+        // particular, availability probes and SSE delivery never reach here.
+        updateSavedSessions(try KeychainStore.markConversationRead(
+            credential: credential,
+            cursor: snapshot.eventCursor
+        ))
+        persistActiveConversation()
+        prefetchMedia(in: messages, using: credential)
         return true
     }
 
+    private func acceptsActiveSnapshot(for candidate: SessionCredential) -> Bool {
+        ConversationSessionSyncValidity.acceptsSnapshot(
+            for: candidate,
+            activeCredential: credential,
+            maintainsConnection: shouldMaintainConnection,
+            isTaskCancelled: Task.isCancelled
+        )
+    }
+
     private func startEventStream(using credential: SessionCredential) {
-        guard credential == self.credential else { return }
+        guard acceptsActiveSnapshot(for: credential) else { return }
         streamTask?.cancel(); isBusy = false; isConnected = true; connectionStatus = "\(String(localized: "已连接")) · \(credential.service.name)"
         sessionAvailability[credential.conversationKey] = .available
         let startAfter = reducer.cursor?.id
@@ -538,6 +571,13 @@ final class BatonViewModel: ObservableObject {
             agentActivity = .idle
         default: break
         }
+        // Streaming deltas are deliberately not written one character at a
+        // time. A completed message or the next accepted server snapshot
+        // persists the same source-of-truth result.
+        if event.type != "message.delta" {
+            persistActiveConversation()
+            prefetchMedia(in: messages, using: credential)
+        }
         return false
     }
 
@@ -565,6 +605,8 @@ final class BatonViewModel: ObservableObject {
     private func merge(_ message: ConversationMessage) {
         reducer.mergeMessage(message)
         messages = reducer.messages
+        persistActiveConversation()
+        if let credential { prefetchMedia(in: messages, using: credential) }
     }
 
     private func appendOutbox(_ message: PendingOutboxMessage) throws {
@@ -683,14 +725,26 @@ final class BatonViewModel: ObservableObject {
         guard expectedCredential == nil || credential == expectedCredential else { return false }
         let removedCredential = credential
         shouldMaintainConnection = false
+        snapshotTask?.cancel(); snapshotTask = nil
         streamTask?.cancel(); streamTask = nil
         outboxRetryTask?.cancel(); outboxRetryTask = nil
+        mediaPrefetchTask?.cancel(); mediaPrefetchTask = nil
+        cacheRestoreTask?.cancel(); cacheRestoreTask = nil
+        imageLoader?.invalidate()
         let persistenceError = removedCredential.flatMap { removePersistedSession($0) }
+        guard persistenceError == nil else {
+            // Do not present the device as disconnected while its Keychain
+            // credential or its durable replica may still be present. The
+            // user can retry the same explicit disconnect safely.
+            connectionStatus = String(localized: "本地会话清理失败")
+            errorMessage = persistenceError
+            return false
+        }
         credential = nil; conversation = nil; messages = []; reducer = ConversationEventReducer(); imageLoader = nil
         pendingOutbox = []; outboxStates = [:]
         activeRunID = nil; agentActivity = .idle; isConnected = false; isBusy = false; connectionStatus = String(localized: "尚未连接"); errorMessage = persistenceError
         endIdempotencyKey = nil
-        return persistenceError == nil
+        return true
     }
 
     private func closeConversation(matching credential: SessionCredential? = nil) {
@@ -844,6 +898,52 @@ final class BatonViewModel: ObservableObject {
         }
     }
 
+    private func restoreCachedConversation(from store: ConversationLocalStore, using credential: SessionCredential) async {
+        let cached = await Task.detached(priority: .userInitiated) {
+            try? store.loadSnapshot(for: credential)
+        }.value
+        guard let cached else { return }
+        let snapshot = ConversationSnapshot(
+            id: cached.conversation.id,
+            title: cached.conversation.title,
+            agentName: cached.conversation.agentName,
+            messages: cached.messages,
+            eventCursor: cached.cursor
+        )
+        guard reducer.replaceSnapshot(snapshot) else { return }
+        messages = reducer.messages
+        conversation = cached.conversation
+        activeRunID = nil
+        agentActivity = .idle
+    }
+
+    private func persistActiveConversation() {
+        guard let credential,
+              let conversation,
+              let cursor = reducer.cursor else { return }
+        let store = ConversationLocalStore(credential: credential)
+        let currentMessages = messages
+        Task.detached(priority: .utility) {
+            try? store.saveSnapshot(conversation: conversation, messages: currentMessages, cursor: cursor)
+        }
+    }
+
+    private func prefetchMedia(in messages: [ConversationMessage], using credential: SessionCredential) {
+        guard let imageLoader else { return }
+        let images = Dictionary(
+            messages.flatMap { $0.content.compactMap(\.image) }.map { ($0.mediaID, $0) },
+            uniquingKeysWith: { first, _ in first }
+        ).values
+        guard !images.isEmpty else { return }
+        mediaPrefetchTask?.cancel()
+        mediaPrefetchTask = Task { [weak self, imageLoader] in
+            for image in images {
+                guard !Task.isCancelled, self?.credential == credential else { return }
+                _ = try? await imageLoader.image(for: image)
+            }
+        }
+    }
+
     private func makeDeviceProof() throws -> String {
         let byteCount = 32
         var bytes = [UInt8](repeating: 0, count: byteCount)
@@ -871,13 +971,18 @@ final class BatonViewModel: ObservableObject {
     func dismissVoiceIssue() { speechInput.dismissIssue() }
 
     private func activateSession(_ selectedCredential: SessionCredential) {
+        snapshotTask?.cancel(); snapshotTask = nil
         streamTask?.cancel(); streamTask = nil
         outboxRetryTask?.cancel(); outboxRetryTask = nil
+        mediaPrefetchTask?.cancel(); mediaPrefetchTask = nil
+        cacheRestoreTask?.cancel(); cacheRestoreTask = nil
+        imageLoader?.invalidate()
         speechInput.discardTranscript()
         composerText = ""
         credential = selectedCredential
         pendingOutbox = []; outboxStates = [:]
-        imageLoader = BatonImageLoader(endpoint: selectedCredential.conversationEndpoint, token: selectedCredential.accessToken) { [weak self] in
+        let localStore = ConversationLocalStore(credential: selectedCredential)
+        imageLoader = BatonImageLoader(endpoint: selectedCredential.conversationEndpoint, token: selectedCredential.accessToken, localStore: localStore) { [weak self] in
             self?.discardTerminatedActiveSession(detail: String(localized: "媒体访问凭据已失效，请重新连接。"), matching: selectedCredential)
         }
         conversation = selectedCredential.conversation
@@ -895,7 +1000,12 @@ final class BatonViewModel: ObservableObject {
         do {
             updateSavedSessions(try KeychainStore.upsertSession(selectedCredential))
             refreshOutboxPresentation(for: selectedCredential)
-            refreshAndStream()
+            cacheRestoreTask = Task { [weak self] in
+                guard let self else { return }
+                await self.restoreCachedConversation(from: localStore, using: selectedCredential)
+                guard self.credential == selectedCredential, !Task.isCancelled else { return }
+                self.refreshAndStream()
+            }
         } catch {
             shouldMaintainConnection = false
             connectionStatus = String(localized: "会话恢复失败")
@@ -922,12 +1032,15 @@ final class BatonViewModel: ObservableObject {
         api: BatonAPIClient
     ) async -> (StoredConversationSession, SessionAvailabilityProbe) {
         do {
-            _ = try await api.snapshot(
+            let snapshot = try await api.snapshot(
                 endpoint: session.credential.conversationEndpoint,
                 token: session.credential.accessToken,
                 timeout: 8
             )
-            return (session, .available)
+            guard snapshot.id == session.credential.conversation.id else {
+                return (session, .unavailable)
+            }
+            return (session, .available(snapshot.eventCursor))
         } catch {
             return (session, isTerminalSavedSessionError(error) ? .terminal : .unavailable)
         }
@@ -939,8 +1052,18 @@ final class BatonViewModel: ObservableObject {
         guard let current = try? KeychainStore.loadSessions().first(where: { $0.id == session.id }),
               current.credential == session.credential else { return }
         switch result {
-        case .available:
+        case let .available(cursor):
             sessionAvailability[session.id] = .available
+            do {
+                // A list probe may show newer server state, but it is not an
+                // open/read action and therefore never changes sync time.
+                updateSavedSessions(try KeychainStore.recordObservedConversationCursor(
+                    credential: session.credential,
+                    cursor: cursor
+                ))
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         case .unavailable:
             sessionAvailability[session.id] = .unavailable
         case .terminal:
@@ -973,6 +1096,7 @@ final class BatonViewModel: ObservableObject {
             // The same Conversation can be paired again with a replacement
             // device session while an earlier request is still in flight.
             guard saved.credential == session else { return nil }
+            try ConversationLocalStore(credential: session).removeAll()
             updateSavedSessions(try KeychainStore.removeConversation(conversationKey: session.conversationKey))
             let retainedOutbox = try KeychainStore.loadOutbox().filter { !$0.belongs(toConversationOf: session) }
             try KeychainStore.saveOutbox(retainedOutbox)

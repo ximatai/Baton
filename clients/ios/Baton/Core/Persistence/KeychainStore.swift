@@ -37,6 +37,40 @@ enum KeychainStore {
         return sessions
     }
 
+    @discardableResult
+    static func markConversationRead(
+        credential: SessionCredential,
+        cursor: EventCursor,
+        at date: Date = .now
+    ) throws -> [StoredConversationSession] {
+        let existing = try loadSessions()
+        let sessions = ConversationSessionIndex.markingRead(
+            for: credential,
+            cursor: cursor,
+            at: date,
+            in: existing
+        )
+        guard sessions != existing else { return existing }
+        try save(sessions, account: sessionsAccount)
+        return sessions
+    }
+
+    @discardableResult
+    static func recordObservedConversationCursor(
+        credential: SessionCredential,
+        cursor: EventCursor
+    ) throws -> [StoredConversationSession] {
+        let existing = try loadSessions()
+        let sessions = ConversationSessionIndex.recordingObserved(
+            for: credential,
+            cursor: cursor,
+            in: existing
+        )
+        guard sessions != existing else { return existing }
+        try save(sessions, account: sessionsAccount)
+        return sessions
+    }
+
     static func savePending(_ credential: PendingPairingCredential) throws {
         try save(credential, account: pendingPairingAccount)
     }

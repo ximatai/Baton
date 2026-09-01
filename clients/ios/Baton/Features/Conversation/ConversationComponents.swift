@@ -39,16 +39,30 @@ private struct MessageContentStack: View {
             if message.content.isEmpty, message.status == "streaming" {
                 Text("正在思考…")
             } else {
-                ForEach(Array(message.content.enumerated()), id: \.offset) { _, content in
+                ForEach(Array(message.content.enumerated()), id: \.offset) { offset, content in
                     switch content {
                     case let .text(text):
                         if message.role == .assistant {
                             MarkdownMessageView(source: text)
+                                .fixedSize(horizontal: false, vertical: true)
                         } else {
-                            Text(text).textSelection(.enabled)
+                            Text(text)
+                                .textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
-                    case let .image(image):
-                        RemoteMessageImageView(content: image, loader: imageLoader)
+                    case .image:
+                        if isImageRunStart(at: offset) {
+                            let images = imageRun(startingAt: offset)
+                            if images.count == 1, let image = images.first {
+                                RemoteMessageImageView(content: image, loader: imageLoader)
+                            } else {
+                                MessageImageGrid(
+                                    images: images,
+                                    siblings: message.content.compactMap(\.image),
+                                    loader: imageLoader
+                                )
+                            }
+                        }
                     case let .unsupported(type, alt):
                         Label(alt ?? "此内容暂不支持（\(type)）", systemImage: "questionmark.square.dashed")
                             .font(.footnote)
@@ -56,6 +70,50 @@ private struct MessageContentStack: View {
                             .accessibilityLabel(alt ?? "此内容暂不支持，类型：\(type)")
                     }
                 }
+            }
+        }
+    }
+
+    private func isImageRunStart(at index: Int) -> Bool {
+        index == 0 || message.content[index - 1].image == nil
+    }
+
+    private func imageRun(startingAt index: Int) -> [MessageImage] {
+        message.content[index...].prefix { $0.image != nil }.compactMap(\.image)
+    }
+}
+
+private struct MessageImageGrid: View {
+    let images: [MessageImage]
+    let siblings: [MessageImage]
+    let loader: BatonImageLoader?
+    @State private var selectedMediaID: String?
+
+    // Keep a multi-image message compact: each rendition preserves its aspect
+    // ratio inside this visual ceiling, then the grid wraps siblings to rows.
+    private let thumbnailHeight: CGFloat = 132
+    private let columns = [GridItem(.adaptive(minimum: 120, maximum: 168), spacing: 8)]
+
+    var body: some View {
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+            ForEach(images) { image in
+                RemoteMessageImageView(
+                    content: image,
+                    loader: loader,
+                    maximumHeight: thumbnailHeight,
+                    openGallery: { selectedMediaID = image.mediaID }
+                )
+                .frame(height: thumbnailHeight)
+            }
+        }
+        .sheet(
+            isPresented: Binding(
+                get: { selectedMediaID != nil },
+                set: { if !$0 { selectedMediaID = nil } }
+            )
+        ) {
+            if let selectedMediaID {
+                MessageImageGallery(images: siblings, loader: loader, initialMediaID: selectedMediaID)
             }
         }
     }
@@ -180,7 +238,7 @@ struct PendingOutboxMessageCard: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(stateTitle).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
-                Text(item.message.text).font(.body).lineLimit(3)
+                Text(item.message.text).font(.body)
             }
             Spacer(minLength: 4)
             if item.state.canRetry {

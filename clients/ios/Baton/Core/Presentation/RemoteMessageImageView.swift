@@ -6,20 +6,37 @@ import UIKit
 struct RemoteMessageImageView: View {
     let content: MessageImage
     let loader: BatonImageLoader?
+    let maximumHeight: CGFloat
+    let openGallery: (() -> Void)?
 
     @State private var image: UIImage?
     @State private var failed = false
     @State private var isPreviewPresented = false
     @State private var retryID = 0
 
+    init(
+        content: MessageImage,
+        loader: BatonImageLoader?,
+        maximumHeight: CGFloat = 220,
+        openGallery: (() -> Void)? = nil
+    ) {
+        self.content = content
+        self.loader = loader
+        self.maximumHeight = maximumHeight
+        self.openGallery = openGallery
+    }
+
     var body: some View {
         Group {
             if let image {
-                Button { isPreviewPresented = true } label: {
+                Button {
+                    if let openGallery { openGallery() }
+                    else { isPreviewPresented = true }
+                } label: {
                     Image(uiImage: image)
                         .resizable()
                         .scaledToFit()
-                        .frame(maxWidth: 300, maxHeight: 280)
+                        .frame(maxWidth: .infinity, maxHeight: maximumHeight)
                         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                 }
                 .buttonStyle(.plain)
@@ -50,39 +67,91 @@ struct RemoteMessageImageView: View {
             }
         }
         .sheet(isPresented: $isPreviewPresented) {
-            ImagePreview(image: image, alt: content.alt)
+            MessageImageGallery(images: [content], loader: loader, initialMediaID: content.mediaID)
         }
     }
 }
 
-private struct ImagePreview: View {
-    let image: UIImage?
-    let alt: String
+struct MessageImageGallery: View {
+    let images: [MessageImage]
+    let loader: BatonImageLoader?
+    let initialMediaID: String
+    @State private var selectedMediaID: String
     @Environment(\.dismiss) private var dismiss
+
+    init(images: [MessageImage], loader: BatonImageLoader?, initialMediaID: String) {
+        self.images = images
+        self.loader = loader
+        self.initialMediaID = initialMediaID
+        _selectedMediaID = State(initialValue: initialMediaID)
+    }
+
+    var body: some View {
+        NavigationStack {
+            TabView(selection: $selectedMediaID) {
+                ForEach(images) { image in
+                    ImagePreviewPage(content: image, loader: loader)
+                        .tag(image.mediaID)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: images.count > 1 ? .automatic : .never))
+            .background(.black)
+            .navigationTitle(images.count > 1 ? "图片 \(pageNumber) / \(images.count)" : "图片")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var pageNumber: Int {
+        (images.firstIndex(where: { $0.mediaID == selectedMediaID }) ?? 0) + 1
+    }
+}
+
+private struct ImagePreviewPage: View {
+    let content: MessageImage
+    let loader: BatonImageLoader?
+    @State private var image: UIImage?
+    @State private var failed = false
     @State private var scale = 1.0
     @State private var lastScale = 1.0
 
     var body: some View {
-        NavigationStack {
-            GeometryReader { proxy in
-                if let image {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFit()
-                        .scaleEffect(scale)
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .gesture(
-                            MagnifyGesture()
-                                .onChanged { value in scale = min(max(lastScale * value.magnification, 1), 5) }
-                                .onEnded { _ in lastScale = scale }
-                        )
-                        .accessibilityLabel(alt)
-                }
+        GeometryReader { proxy in
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .scaleEffect(scale)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                    .gesture(
+                        MagnifyGesture()
+                            .onChanged { value in scale = min(max(lastScale * value.magnification, 1), 5) }
+                            .onEnded { _ in lastScale = scale }
+                    )
+                    .accessibilityLabel(content.alt)
+            } else if failed || loader == nil {
+                Label("图片无法加载", systemImage: "photo.badge.exclamationmark")
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("\(content.alt)，图片无法加载")
+            } else {
+                ProgressView("正在加载图片…")
+                    .tint(.white)
+                    .foregroundStyle(.white)
             }
-            .background(.black)
-            .navigationTitle("图片")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+        }
+        .background(.black)
+        .task(id: content.url.absoluteString) {
+            guard let loader else { return }
+            do {
+                image = try await loader.image(for: content)
+                failed = false
+            } catch {
+                failed = true
+            }
         }
     }
 }

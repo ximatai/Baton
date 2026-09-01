@@ -159,12 +159,11 @@ struct BatonAPIClient: Sendable {
               responseMIMEType == image.mimeType.lowercased() else {
             throw CompanionAPIError.invalidImage
         }
-        return BatonImageResponse(
-            data: data,
-            privateCacheLifetime: BatonImageCachePolicy.privateCacheLifetime(
-                from: http.value(forHTTPHeaderField: "Cache-Control")
-            )
-        )
+        // Media is intentionally fetched through an ephemeral URLSession, so
+        // HTTP cache directives never place authenticated bytes in URLCache or
+        // on disk. The active Baton session owns its separate decoded-image
+        // cache below.
+        return BatonImageResponse(data: data)
     }
 
     func cancel(endpoint: URL, token: String, runID: String) async throws {
@@ -287,37 +286,8 @@ enum BatonImageLimits {
     static let cacheTotalCostLimit = 80 * 1_024 * 1_024
 }
 
-/// A sensitive rendition is non-cacheable unless the service explicitly grants
-/// a bounded private lifetime. `no-store` is always authoritative, including
-/// for this process's in-memory cache.
-enum BatonImageCachePolicy {
-    static func privateCacheLifetime(from header: String?) -> TimeInterval? {
-        guard let header else { return nil }
-        var isPrivate = false
-        var forbidsStorage = false
-        var maxAge: TimeInterval?
-
-        for rawDirective in header.split(separator: ",") {
-            let parts = rawDirective.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
-            let name = parts[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            switch name {
-            case "private": isPrivate = true
-            case "no-store", "no-cache": forbidsStorage = true
-            case "max-age" where parts.count == 2:
-                let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-                if let seconds = TimeInterval(value), seconds > 0 { maxAge = seconds }
-            default: break
-            }
-        }
-        guard isPrivate, !forbidsStorage, let maxAge else { return nil }
-        return maxAge
-    }
-}
-
 struct BatonImageResponse {
     let data: Data
-    let privateCacheLifetime: TimeInterval?
 }
 
 @MainActor
@@ -325,56 +295,107 @@ final class BatonImageLoader: ObservableObject {
     private let endpoint: URL
     private let token: String
     private let api: BatonAPIClient
+    private let localStore: ConversationLocalStore?
     private let onTerminalFailure: @MainActor () -> Void
     // The media rendition identity survives URL rotation and is the only
     // stable cache key permitted by the Companion Profile.
     private let cache = NSCache<NSString, CachedImage>()
+    /// View recycling may request the same rendition before its first request
+    /// completes. Coalesce that work as well as retaining decoded thumbnails
+    /// for this active session only.
+    private var inFlight = [String: Task<UIImage, Error>]()
+    private var isInvalidated = false
 
-    init(endpoint: URL, token: String, onTerminalFailure: @escaping @MainActor () -> Void = {}) {
+    init(endpoint: URL, token: String, localStore: ConversationLocalStore? = nil, onTerminalFailure: @escaping @MainActor () -> Void = {}) {
         self.endpoint = endpoint
         self.token = token
         self.api = BatonAPIClient()
+        self.localStore = localStore
         self.onTerminalFailure = onTerminalFailure
         cache.countLimit = 40
         cache.totalCostLimit = BatonImageLimits.cacheTotalCostLimit
     }
 
-    init(endpoint: URL, token: String, api: BatonAPIClient, onTerminalFailure: @escaping @MainActor () -> Void = {}) {
+    init(endpoint: URL, token: String, api: BatonAPIClient, localStore: ConversationLocalStore? = nil, onTerminalFailure: @escaping @MainActor () -> Void = {}) {
         self.endpoint = endpoint
         self.token = token
         self.api = api
+        self.localStore = localStore
         self.onTerminalFailure = onTerminalFailure
         cache.countLimit = 40
         cache.totalCostLimit = BatonImageLimits.cacheTotalCostLimit
     }
 
     func image(for content: MessageImage) async throws -> UIImage {
+        guard !isInvalidated else { throw CancellationError() }
         let key = content.mediaID as NSString
         if let cached = cache.object(forKey: key) {
-            if cached.expiry > Date() { return cached.image }
-            cache.removeObject(forKey: key)
+            return cached.image
         }
-        do {
+        let storedData = await Task.detached(priority: .userInitiated) { [localStore] in
+            try? localStore?.mediaData(for: content.mediaID)
+        }.value
+        if let data = storedData,
+           let image = try? Self.decodeStaticImage(data, declaredMIMEType: content.mimeType) {
+            cache.setObject(CachedImage(image: image), forKey: key)
+            return image
+        }
+
+        if let task = inFlight[content.mediaID] {
+            return try await task.value
+        }
+
+        let task = Task { [api, endpoint, token] in
             let response = try await api.imageData(for: content, endpoint: endpoint, token: token)
             let image = try Self.decodeStaticImage(response.data, declaredMIMEType: content.mimeType)
-            let cost = image.cgImage.map { $0.bytesPerRow.multipliedReportingOverflow(by: $0.height) }.flatMap { $0.overflow ? nil : $0.partialValue } ?? BatonImageLimits.cacheTotalCostLimit
-            if let lifetime = response.privateCacheLifetime {
-                cache.setObject(CachedImage(image: image, expiry: Date().addingTimeInterval(lifetime)), forKey: key, cost: min(cost, BatonImageLimits.cacheTotalCostLimit))
+            return (image, response.data)
+        }
+        inFlight[content.mediaID] = Task {
+            let (image, data) = try await task.value
+            guard !self.isInvalidated else { throw CancellationError() }
+            let cost = image.cgImage.map { $0.bytesPerRow.multipliedReportingOverflow(by: $0.height) }
+                .flatMap { $0.overflow ? nil : $0.partialValue } ?? BatonImageLimits.cacheTotalCostLimit
+            self.cache.setObject(
+                CachedImage(image: image),
+                forKey: key,
+                cost: min(cost, BatonImageLimits.cacheTotalCostLimit)
+            )
+            // A failed local write must never turn an already valid media
+            // response into a display failure (for example, when storage is
+            // temporarily unavailable).
+            if let localStore = self.localStore {
+                await Task.detached(priority: .utility) {
+                    try? localStore.saveMedia(data, mediaID: content.mediaID)
+                }.value
             }
+            guard !self.isInvalidated else { throw CancellationError() }
+            return image
+        }
+
+        do {
+            guard let activeTask = inFlight[content.mediaID] else { throw CompanionAPIError.invalidResponse }
+            let image = try await activeTask.value
+            inFlight[content.mediaID] = nil
             return image
         } catch {
+            inFlight[content.mediaID] = nil
             if (error as? CompanionAPIError)?.invalidatesSessionCredential == true { onTerminalFailure() }
             throw error
         }
     }
 
+    func invalidate() {
+        isInvalidated = true
+        cache.removeAllObjects()
+        inFlight.values.forEach { $0.cancel() }
+        inFlight.removeAll()
+    }
+
     private final class CachedImage {
         let image: UIImage
-        let expiry: Date
 
-        init(image: UIImage, expiry: Date) {
+        init(image: UIImage) {
             self.image = image
-            self.expiry = expiry
         }
     }
 

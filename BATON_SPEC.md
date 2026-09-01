@@ -420,15 +420,15 @@ own logged-in service session through a service-specific bridge or resolver.
 Baton deliberately does not define that endpoint or its authentication policy;
 the event log remains client-neutral and must not contain a Web-session URL.
 
-Media responses are sensitive by default and must send `Cache-Control: private,
-no-store`; clients must not retain either bytes or decoded images in memory or
-on disk after use. A service that explicitly permits **bounded private memory
-caching** must send `Cache-Control: private, max-age=<positive-seconds>` without
-`no-store` or `no-cache`; iOS may cache that rendition by `media_id` only until
-that lifetime expires, subject to its memory limit. iOS never delegates media
-bytes to URLSession/URLCache or disk caching: this bounded `media_id` cache is
-the only permitted Baton media cache. Any broader private caching policy must
-define ETag, lifetime, and post-revocation behavior. `401
+Each paired Baton Conversation has a local, read-only replica: accepted server
+snapshots and downloaded media are retained by `media_id`, so the user can read
+the prior history after restarting offline and a rendition does not re-download
+when scrolling back. This is Baton session state, not an HTTP cache: iOS never
+delegates media bytes to URLSession/URLCache. The replica lives only in the
+app's private, file-protected, backup-excluded storage and contains neither a
+Bearer token nor `device_proof`; response `Cache-Control` directives do not
+change this behavior. It is deleted when the user removes the paired session or
+the session credential is invalidated or revoked. `401
 invalid_token` invalidates a Baton device session; `404` or `410` for an
 individual media URL means only that attachment is unavailable and must not end
 the Conversation.

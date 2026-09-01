@@ -46,6 +46,8 @@ struct ConversationSessionIndexTests {
         #expect(updatedEntries.count == 1)
         #expect(updatedEntries.first?.id == original.conversationKey)
         #expect(updatedEntries.first?.credential.sessionID == "session_2")
+        #expect(updatedEntries.first?.lastReadCursor == nil)
+        #expect(updatedEntries.first?.lastSuccessfulSyncAt == nil)
     }
 
     @Test func identicalConversationIDsFromDifferentServiceOriginsStaySeparate() {
@@ -60,5 +62,101 @@ struct ConversationSessionIndexTests {
 
         #expect(entries.count == 2)
         #expect(Set(entries.map(\.id)) == Set([first.conversationKey, second.conversationKey]))
+    }
+
+    @Test func readStateIsKeptForTheSameCredentialButIsolatedFromOtherSessions() {
+        let first = credential(sessionID: "session_1", conversationID: "conv_1")
+        let second = credential(sessionID: "session_2", conversationID: "conv_2")
+        let cursor = EventCursor(id: "evt_10", sequence: 10)!
+        let syncedAt = Date(timeIntervalSince1970: 100)
+        let sessions = ConversationSessionIndex.markingRead(
+            for: first,
+            cursor: cursor,
+            at: syncedAt,
+            in: [
+                StoredConversationSession(credential: first),
+                StoredConversationSession(credential: second)
+            ]
+        )
+
+        let reactivated = ConversationSessionIndex.upserting(first, into: sessions, at: Date(timeIntervalSince1970: 200))
+        let updatedFirst = reactivated.first { $0.credential == first }
+        let untouchedSecond = reactivated.first { $0.credential == second }
+        #expect(updatedFirst?.lastReadCursor == cursor)
+        #expect(updatedFirst?.lastSuccessfulSyncAt == syncedAt)
+        #expect(untouchedSecond?.lastReadCursor == nil)
+    }
+
+    @Test func availabilityObservationShowsAnUpdateWithoutAdvancingReadState() {
+        let saved = credential(sessionID: "session_1", conversationID: "conv_1")
+        let read = EventCursor(id: "evt_10", sequence: 10)!
+        let observed = EventCursor(id: "evt_12", sequence: 12)!
+        let initial = ConversationSessionIndex.markingRead(
+            for: saved,
+            cursor: read,
+            at: Date(timeIntervalSince1970: 100),
+            in: [StoredConversationSession(credential: saved)]
+        )
+        let observedSessions = ConversationSessionIndex.recordingObserved(
+            for: saved,
+            cursor: observed,
+            in: initial
+        )
+        let summary = ConversationSessionSummary(observedSessions[0])
+
+        #expect(observedSessions[0].lastReadCursor == read)
+        #expect(observedSessions[0].lastSuccessfulSyncAt == Date(timeIntervalSince1970: 100))
+        #expect(summary.hasUnreadUpdates)
+    }
+
+    @Test func legacyStoredSessionDecodesWithAnUnknownReadBaseline() throws {
+        let original = StoredConversationSession(
+            credential: credential(sessionID: "session_1", conversationID: "conv_1"),
+            lastActivatedAt: Date(timeIntervalSince1970: 100)
+        )
+        var object = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+        object.removeValue(forKey: "lastReadCursor")
+        object.removeValue(forKey: "lastSuccessfulSyncAt")
+        object.removeValue(forKey: "latestObservedCursor")
+        let decoded = try JSONDecoder().decode(
+            StoredConversationSession.self,
+            from: JSONSerialization.data(withJSONObject: object)
+        )
+
+        #expect(decoded.credential == original.credential)
+        #expect(decoded.lastReadCursor == nil)
+        #expect(decoded.lastSuccessfulSyncAt == nil)
+        #expect(decoded.latestObservedCursor == nil)
+        #expect(!ConversationSessionSummary(decoded).hasUnreadUpdates)
+    }
+
+    @Test func suspendedOrReplacedSessionCannotAcceptAnInFlightSnapshot() {
+        let first = credential(sessionID: "session_1", conversationID: "conv_1")
+        let replacement = credential(sessionID: "session_2", conversationID: "conv_1")
+
+        #expect(!ConversationSessionSyncValidity.acceptsSnapshot(
+            for: first,
+            activeCredential: first,
+            maintainsConnection: false,
+            isTaskCancelled: false
+        ))
+        #expect(!ConversationSessionSyncValidity.acceptsSnapshot(
+            for: first,
+            activeCredential: replacement,
+            maintainsConnection: true,
+            isTaskCancelled: false
+        ))
+        #expect(!ConversationSessionSyncValidity.acceptsSnapshot(
+            for: first,
+            activeCredential: first,
+            maintainsConnection: true,
+            isTaskCancelled: true
+        ))
+        #expect(ConversationSessionSyncValidity.acceptsSnapshot(
+            for: first,
+            activeCredential: first,
+            maintainsConnection: true,
+            isTaskCancelled: false
+        ))
     }
 }

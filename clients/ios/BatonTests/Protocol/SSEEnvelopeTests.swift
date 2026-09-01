@@ -29,13 +29,6 @@ struct SSEEnvelopeTests {
         #expect(!BatonEventType.isKnown("message.content.replaced"))
     }
 
-    @Test func imageMemoryCachingRequiresExplicitPrivateLifetime() {
-        #expect(BatonImageCachePolicy.privateCacheLifetime(from: "private, no-store") == nil)
-        #expect(BatonImageCachePolicy.privateCacheLifetime(from: "private, no-cache, max-age=60") == nil)
-        #expect(BatonImageCachePolicy.privateCacheLifetime(from: "public, max-age=60") == nil)
-        #expect(BatonImageCachePolicy.privateCacheLifetime(from: "private, max-age=60") == 60)
-    }
-
     @Test func imageRequestsCannotUseSystemURLCache() {
         let configuration = BatonAPIClient.mediaSessionConfiguration()
         #expect(configuration.urlCache == nil)

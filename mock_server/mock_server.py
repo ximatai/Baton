@@ -286,6 +286,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", mime_type)
         self.send_header("Content-Length", str(len(value)))
+        # Baton uses a bounded, active-session-only decoded-image cache. It
+        # never delegates media to URLSession or disk caches, regardless of
+        # this transport directive.
         self.send_header("Cache-Control", "private, no-store")
         self.end_headers()
         self.wfile.write(value)

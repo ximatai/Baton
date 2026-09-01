@@ -66,7 +66,7 @@ Java 服务应使 `manual` approval 具有服务端授权检查和一次性状�
 
 ## 服务端图片内容
 
-服务可在按时间顺序的消息 `content[]` 中下发 `{ "type": "image", "media_id", "url", "mime_type", "width", "height", "alt" }`，并在 discovery 声明 `"image": true`。`media_id` 必须是服务内唯一、opaque、指向不可变 media rendition 的稳定身份；`url` 只是 Baton iOS 的读取地址，必须与 Conversation endpoint 精确同源、不得包含 token。Baton 会带现有 Bearer header 请求它且拒绝重定向。只支持静态 `image/jpeg`、`image/png`、`image/webp`，响应 MIME 必须与 `mime_type` 一致，单项不超过 12 MiB / 2500 万解码像素。不得把图片 bytes 写入 snapshot、SSE、日志或 `content` JSON，也不得借此增加上传、文件或外链图床接口。默认响应 `Cache-Control: private, no-store`，Baton 不保留其 bytes 或解码图；只有明确的 `Cache-Control: private, max-age=<positive-seconds>`（且没有 `no-store`/`no-cache`）才允许 iOS 按 `media_id` 在内存上限内缓存至过期。iOS 媒体请求绝不交给 URLSession/URLCache 或磁盘缓存；这项受限、到期的 `media_id` 内存缓存是唯一允许的 Baton 图片缓存。`401 invalid_token` 使 Baton 删除会话，单个媒体的 `404/410` 只显示附件不可用。
+服务可在按时间顺序的消息 `content[]` 中下发 `{ "type": "image", "media_id", "url", "mime_type", "width", "height", "alt" }`，并在 discovery 声明 `"image": true`。`media_id` 必须是服务内唯一、opaque、指向不可变 media rendition 的稳定身份；`url` 只是 Baton iOS 的读取地址，必须与 Conversation endpoint 精确同源、不得包含 token。Baton 会带现有 Bearer header 请求它且拒绝重定向。只支持静态 `image/jpeg`、`image/png`、`image/webp`，响应 MIME 必须与 `mime_type` 一致，单项不超过 12 MiB / 2500 万解码像素。不得把图片 bytes 写入 snapshot、SSE、日志或 `content` JSON，也不得借此增加上传、文件或外链图床接口。Baton 会把已接受的 Conversation 快照和已下载媒体按会话、`media_id` 保存为私有离线副本；这不依赖 `Cache-Control`，也不使用 URLSession/URLCache。副本受 iOS 文件保护、不会备份，并在设备移除配对、`401 invalid_token` 或会话撤销时删除；不得在其中写入 Bearer、`device_proof` 或 Web 凭据。单个媒体的 `404/410` 只显示附件不可用。
 
 Web、桌面端不得获得或复用 Baton device Bearer。它们以现有 Cookie/SSO/网关会话通过服务自有 bridge/resolver 读取同一 `media_id`；该接口不属于 Baton 规范，且不得把任一 Web 会话专属 URL 写进 Baton snapshot 或 SSE。
 
