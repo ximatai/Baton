@@ -63,8 +63,9 @@ final class BatonViewModel: ObservableObject {
     @Published private(set) var pendingApprovalURL: URL?
     @Published private(set) var pendingApprovalMode: PairingApprovalMode?
     @Published private(set) var voiceState: SpeechInputService.State = .idle
-    /// Ordered by most recently activated. Only the selected session owns an SSE
-    /// connection; summaries intentionally contain no session credential.
+    /// Pinned sessions first, then by most recent message interaction. Only
+    /// the selected session owns an SSE connection; summaries intentionally
+    /// contain no session credential.
     @Published private(set) var savedSessions: [ConversationSessionSummary] = []
     @Published private(set) var sessionAvailability: [String: ConversationAvailability] = [:]
     /// Failures from explicit list operations belong to the affected local
@@ -551,6 +552,7 @@ final class BatonViewModel: ObservableObject {
         }
         switch event.type {
         case "message.created":
+            recordConversationInteraction(for: credential)
             if let message = decodeMessage(event.data),
                let id = message.clientMessageID,
                let pending = try? KeychainStore.loadOutbox().first(where: {
@@ -605,8 +607,17 @@ final class BatonViewModel: ObservableObject {
     private func merge(_ message: ConversationMessage) {
         reducer.mergeMessage(message)
         messages = reducer.messages
+        if let credential { recordConversationInteraction(for: credential) }
         persistActiveConversation()
         if let credential { prefetchMedia(in: messages, using: credential) }
+    }
+
+    private func recordConversationInteraction(for credential: SessionCredential) {
+        do {
+            updateSavedSessions(try KeychainStore.recordConversationInteraction(credential: credential))
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     private func appendOutbox(_ message: PendingOutboxMessage) throws {

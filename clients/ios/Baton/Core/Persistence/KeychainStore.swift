@@ -55,6 +55,25 @@ enum KeychainStore {
         return sessions
     }
 
+    /// Records actual conversation activity for the local recent-session
+    /// ordering. Merely opening a saved Conversation is deliberately not an
+    /// activity signal.
+    @discardableResult
+    static func recordConversationInteraction(
+        credential: SessionCredential,
+        at date: Date = .now
+    ) throws -> [StoredConversationSession] {
+        let existing = try loadSessions()
+        let sessions = ConversationSessionIndex.recordingInteraction(
+            for: credential,
+            at: date,
+            in: existing
+        )
+        guard sessions != existing else { return existing }
+        try save(sessions, account: sessionsAccount)
+        return sessions
+    }
+
     @discardableResult
     static func recordObservedConversationCursor(
         credential: SessionCredential,

@@ -18,7 +18,7 @@ struct ConversationSessionIndexTests {
         )
     }
 
-    @Test func sessionsAreKeptIndependentlyAndOrderedByLastActivation() {
+    @Test func sessionsAreKeptIndependentlyAndOnlyConversationActivityChangesRecency() {
         let first = credential(sessionID: "session_1", conversationID: "conv_1")
         let second = credential(sessionID: "session_2", conversationID: "conv_2")
         let firstOpened = Date(timeIntervalSince1970: 100)
@@ -29,10 +29,17 @@ struct ConversationSessionIndexTests {
         #expect(afterSecond.map(\.id) == [second.conversationKey, first.conversationKey])
 
         let reactivatedFirst = ConversationSessionIndex.upserting(first, into: afterSecond, at: Date(timeIntervalSince1970: 300))
-        #expect(reactivatedFirst.map(\.id) == [first.conversationKey, second.conversationKey])
+        #expect(reactivatedFirst.map(\.id) == [second.conversationKey, first.conversationKey])
         #expect(reactivatedFirst.count == 2)
 
-        let remaining = ConversationSessionIndex.removing(conversationKey: first.conversationKey, from: reactivatedFirst)
+        let interactedFirst = ConversationSessionIndex.recordingInteraction(
+            for: first,
+            at: Date(timeIntervalSince1970: 400),
+            in: reactivatedFirst
+        )
+        #expect(interactedFirst.map(\.id) == [first.conversationKey, second.conversationKey])
+
+        let remaining = ConversationSessionIndex.removing(conversationKey: first.conversationKey, from: interactedFirst)
         #expect(remaining.map(\.id) == [second.conversationKey])
     }
 

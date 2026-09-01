@@ -66,6 +66,9 @@ struct SessionCredential: Codable, Equatable {
 /// derived summary instead. Ordering is local-only and never changes server state.
 struct StoredConversationSession: Codable, Equatable, Identifiable {
     let credential: SessionCredential
+    /// The last local or remote message activity. This retained coding key
+    /// predates the distinction between opening a saved session and actual
+    /// conversation activity.
     let lastActivatedAt: Date
     /// The atomic server boundary last accepted while this conversation was
     /// actually open. It is local UI metadata, not a replacement for history.
@@ -144,6 +147,18 @@ struct StoredConversationSession: Codable, Equatable, Identifiable {
         )
     }
 
+    func recordingInteraction(at date: Date) -> Self {
+        Self(
+            credential: credential,
+            lastActivatedAt: date,
+            lastReadCursor: lastReadCursor,
+            lastSuccessfulSyncAt: lastSuccessfulSyncAt,
+            latestObservedCursor: latestObservedCursor,
+            localTitle: localTitle,
+            isPinned: isPinned
+        )
+    }
+
     func renamingLocally(to title: String?) -> Self {
         Self(
             credential: credential,
@@ -210,7 +225,11 @@ enum ConversationSessionIndex {
         // do not carry read metadata from the old credential into it.
         let replacement = StoredConversationSession(
             credential: credential,
-            lastActivatedAt: date,
+            // Reopening a saved session is navigation, not a new interaction.
+            // Keep its position until the conversation has a new message.
+            lastActivatedAt: existing?.credential == credential
+                ? existing.map(\.lastActivatedAt) ?? date
+                : date,
             lastReadCursor: existing?.credential == credential ? existing?.lastReadCursor : nil,
             lastSuccessfulSyncAt: existing?.credential == credential ? existing?.lastSuccessfulSyncAt : nil,
             latestObservedCursor: existing?.credential == credential ? existing?.latestObservedCursor : nil,
@@ -257,6 +276,18 @@ enum ConversationSessionIndex {
                 ? session.recordingObserved(cursor: cursor)
                 : session
         }
+    }
+
+    static func recordingInteraction(
+        for credential: SessionCredential,
+        at date: Date,
+        in sessions: [StoredConversationSession]
+    ) -> [StoredConversationSession] {
+        sorted(sessions.map { session in
+            session.id == credential.conversationKey && session.credential == credential
+                ? session.recordingInteraction(at: date)
+                : session
+        })
     }
 
     static func renamingLocally(
