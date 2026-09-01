@@ -3,6 +3,8 @@ import SwiftUI
 struct ConversationView: View {
     @ObservedObject var model: BatonViewModel
     @FocusState private var isComposerFocused: Bool
+    @State private var voiceVerticalDrag: CGFloat = 0
+    @State private var isVoiceLongPressActive = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -39,8 +41,12 @@ struct ConversationView: View {
                 if let message = model.voiceState.message {
                     HStack(spacing: 6) {
                         if model.voiceState.isWorking && !model.voiceState.isRecording { ProgressView().controlSize(.small) }
-                        Image(systemName: model.voiceState.isRecording ? "waveform" : "mic.slash")
-                        if model.voiceState.isRecording { Text(message).font(.footnote).foregroundStyle(.tint) }
+                        Image(systemName: isVoiceCancellationArmed ? "xmark.circle.fill" : model.voiceState.isRecording ? "waveform" : "mic.slash")
+                        if model.voiceState.isRecording {
+                            Text(isVoiceCancellationArmed ? "松开取消本次听写" : "正在听写，上滑取消，松开转写")
+                                .font(.footnote)
+                                .foregroundStyle(isVoiceCancellationArmed ? .orange : Color.accentColor)
+                        }
                         else { Text(message).font(.footnote).foregroundStyle(.secondary) }
                         if !model.voiceState.isWorking { Spacer(); Button("知道了") { model.dismissVoiceIssue() }.font(.footnote.bold()) }
                     }.padding(.horizontal, 4)
@@ -52,9 +58,13 @@ struct ConversationView: View {
                         .padding(.horizontal, 4)
                 }
                 HStack(alignment: .center, spacing: 10) {
-                    HStack(alignment: .center, spacing: 8) {
+                    ZStack(alignment: .leading) {
+                        if composerPlaceholder != nil {
+                            voiceInputPlaceholder
+                                .allowsHitTesting(false)
+                        }
                         TextField(
-                            model.composerUnavailableMessage ?? String(localized: "输入消息"),
+                            "",
                             text: $model.composerText,
                             axis: .vertical
                         )
@@ -62,30 +72,38 @@ struct ConversationView: View {
                             .focused($isComposerFocused)
                             .submitLabel(.send)
                             .onSubmit { model.send() }
-                        Image(systemName: microphoneSymbolName)
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(
-                                model.isComposerDisabled
-                                    ? Color.secondary
-                                    : model.voiceState.isRecording ? .red : Color.accentColor
-                            )
-                            .frame(width: 28, height: 28)
-                            .accessibilityHidden(true)
+                            .disabled(model.isComposerDisabled)
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
                     .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                        .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.primary.opacity(0.12)) }
-                    .onLongPressGesture(
-                        minimumDuration: 0.35,
-                        maximumDistance: 32,
-                        perform: beginVoiceInput,
-                        onPressingChanged: { isPressing in
-                            if !isPressing { model.endVoiceInput() }
+                    .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .strokeBorder(composerBorderColor, lineWidth: isVoiceLongPressActive ? 1.5 : 1)
+                    }
+                    .simultaneousGesture(
+                        LongPressGesture(
+                            minimumDuration: 0.25,
+                            maximumDistance: .greatestFiniteMagnitude
+                        )
+                        .onChanged { _ in
+                            voiceVerticalDrag = 0
+                            beginVoiceInputFromLongPress()
                         }
                     )
-                    .accessibilityHint("长按开始本地语音输入，松开后可编辑转写结果")
+                    .simultaneousGesture(
+                        DragGesture(minimumDistance: 0)
+                            .onChanged { value in
+                                guard isVoiceLongPressActive else { return }
+                                voiceVerticalDrag = value.translation.height
+                            }
+                            .onEnded { _ in
+                                guard isVoiceLongPressActive else { return }
+                                finishVoiceInputGesture()
+                            }
+                    )
+                    .accessibilityHint("轻点输入文字；长按开始本地语音转文字，上滑取消，松开后可编辑转写结果")
                     .accessibilityAction(named: model.voiceState.isWorking ? "结束语音输入" : "开始语音输入") {
                         if model.voiceState.isWorking {
                             model.endVoiceInput()
@@ -117,12 +135,51 @@ struct ConversationView: View {
     }
 
     private func beginVoiceInput() {
-        isComposerFocused = false
         model.beginVoiceInput()
     }
 
-    private var microphoneSymbolName: String {
-        if model.isComposerDisabled { return "mic.slash" }
-        return model.voiceState.isRecording ? "waveform" : "mic"
+    private func beginVoiceInputFromLongPress() {
+        guard !isVoiceLongPressActive else { return }
+        isVoiceLongPressActive = true
+        beginVoiceInput()
+    }
+
+    private func finishVoiceInputGesture() {
+        if voiceVerticalDrag < -44 {
+            model.cancelVoiceInput()
+        } else {
+            model.endVoiceInput()
+        }
+        voiceVerticalDrag = 0
+        isVoiceLongPressActive = false
+    }
+
+    private var isVoiceCancellationArmed: Bool {
+        isVoiceLongPressActive && model.voiceState.isWorking && voiceVerticalDrag < -44
+    }
+
+    @ViewBuilder
+    private var voiceInputPlaceholder: some View {
+        if let unavailableMessage = model.composerUnavailableMessage {
+            Text(unavailableMessage)
+                .foregroundStyle(.secondary)
+        } else {
+            HStack(spacing: 0) {
+                Text("按住 ")
+                    .foregroundStyle(.secondary)
+                Text("转文字")
+                    .foregroundStyle(Color.accentColor)
+            }
+        }
+    }
+
+    private var composerPlaceholder: String? {
+        model.composerText.isEmpty ? model.composerUnavailableMessage ?? "" : nil
+    }
+
+    private var composerBorderColor: Color {
+        if isVoiceCancellationArmed { return .orange }
+        if isVoiceLongPressActive { return Color.accentColor }
+        return .primary.opacity(0.12)
     }
 }

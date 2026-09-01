@@ -79,6 +79,8 @@ final class BatonViewModel: ObservableObject {
     private let api = BatonAPIClient()
     private let speechInput = SpeechInputService()
     private var credential: SessionCredential?
+    private var composerBeforeVoiceInput: String?
+    private var acceptsSpeechTranscript = true
     /// Snapshot work is separate from SSE and must share its lifecycle: a
     /// suspended conversation cannot become read when an old response lands.
     private var snapshotTask: Task<Void, Never>?
@@ -144,7 +146,10 @@ final class BatonViewModel: ObservableObject {
         speechInput.$transcript
             .dropFirst()
             .receive(on: RunLoop.main)
-            .sink { [weak self] in self?.composerText = $0 }
+            .sink { [weak self] in
+                guard let self, self.acceptsSpeechTranscript else { return }
+                self.composerText = $0
+            }
             .store(in: &cancellables)
     }
 
@@ -220,6 +225,7 @@ final class BatonViewModel: ObservableObject {
         }
         guard let clientMessageID = draftMessageID else { return }
         isSendingMessage = true
+        acceptsSpeechTranscript = false
         speechInput.discardTranscript()
         Task { [weak self, api] in
             defer {
@@ -290,7 +296,7 @@ final class BatonViewModel: ObservableObject {
     /// conversation is still live.
     func suspendActiveConversation() {
         guard credential != nil else { return }
-        speechInput.stop()
+        cancelVoiceInput()
         shouldMaintainConnection = false
         snapshotTask?.cancel(); snapshotTask = nil
         streamTask?.cancel(); streamTask = nil
@@ -606,7 +612,7 @@ final class BatonViewModel: ObservableObject {
     private func removeLocalSession(matching expectedCredential: SessionCredential? = nil) -> Bool {
         guard expectedCredential == nil || credential == expectedCredential else { return false }
         let removedCredential = credential
-        speechInput.stop()
+        cancelVoiceInput()
         shouldMaintainConnection = false
         snapshotTask?.cancel(); snapshotTask = nil
         streamTask?.cancel(); streamTask = nil
@@ -664,13 +670,13 @@ final class BatonViewModel: ObservableObject {
         }
         guard reconnectAttempt < 5 else {
             activeRunID = nil; agentActivity = .idle
-            speechInput.stop()
+            cancelVoiceInput()
             isConnected = false; connectionStatus = String(localized: "连接已中断"); if let error { errorMessage = error.localizedDescription }
             return
         }
         let delay = min(1 << reconnectAttempt, 16)
         reconnectAttempt += 1
-        speechInput.stop()
+        cancelVoiceInput()
         isConnected = false; connectionStatus = String(localized: "连接中断，正在重连…"); if let error { errorMessage = error.localizedDescription }
         try? await Task.sleep(for: .seconds(delay))
         guard shouldMaintainConnection else { return }
@@ -679,7 +685,7 @@ final class BatonViewModel: ObservableObject {
 
     private func beginBusy(_ text: String) { isBusy = true; errorMessage = nil; connectionStatus = text }
     private func failConnection(_ error: Error) {
-        speechInput.stop()
+        cancelVoiceInput()
         isBusy = false
         isConnected = false
         connectionStatus = String(localized: "连接失败")
@@ -852,12 +858,23 @@ final class BatonViewModel: ObservableObject {
 
     func beginVoiceInput() {
         guard !isComposerDisabled, !voiceState.isWorking else { return }
+        acceptsSpeechTranscript = true
+        composerBeforeVoiceInput = composerText
         speechInput.start(initialText: composerText)
     }
 
     func endVoiceInput() {
         guard voiceState.isWorking else { return }
         speechInput.stop()
+        composerBeforeVoiceInput = nil
+    }
+
+    func cancelVoiceInput() {
+        acceptsSpeechTranscript = false
+        let originalText = composerBeforeVoiceInput
+        composerBeforeVoiceInput = nil
+        speechInput.discardTranscript()
+        if let originalText { composerText = originalText }
     }
 
     func dismissVoiceIssue() { speechInput.dismissIssue() }
@@ -868,6 +885,7 @@ final class BatonViewModel: ObservableObject {
         mediaPrefetchTask?.cancel(); mediaPrefetchTask = nil
         cacheRestoreTask?.cancel(); cacheRestoreTask = nil
         imageLoader?.invalidate()
+        acceptsSpeechTranscript = false
         speechInput.discardTranscript()
         composerText = ""
         draftMessageText = nil
