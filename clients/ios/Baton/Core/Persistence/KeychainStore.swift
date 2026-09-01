@@ -71,6 +71,32 @@ enum KeychainStore {
         return sessions
     }
 
+    @discardableResult
+    static func renameConversationLocally(conversationKey: String, title: String?) throws -> [StoredConversationSession] {
+        let existing = try loadSessions()
+        let sessions = ConversationSessionIndex.renamingLocally(
+            conversationKey: conversationKey,
+            to: title,
+            in: existing
+        )
+        guard sessions != existing else { return existing }
+        try save(sessions, account: sessionsAccount)
+        return sessions
+    }
+
+    @discardableResult
+    static func setConversationPinnedLocally(conversationKey: String, pinned: Bool) throws -> [StoredConversationSession] {
+        let existing = try loadSessions()
+        let sessions = ConversationSessionIndex.settingPinned(
+            conversationKey: conversationKey,
+            to: pinned,
+            in: existing
+        )
+        guard sessions != existing else { return existing }
+        try save(sessions, account: sessionsAccount)
+        return sessions
+    }
+
     static func savePending(_ credential: PendingPairingCredential) throws {
         try save(credential, account: pendingPairingAccount)
     }

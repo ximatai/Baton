@@ -19,7 +19,9 @@ Baton 的本地 Python 服务是协议测试靶场，不是生产后端；Java �
 
 Discovery document 内的 `capabilities` 只是服务端对当前 Conversation
 的能力声明，不是设备协商、也不授予权限。`text: true` 为 V1.1 必填；
-`markdown`、`streaming`、`image`、`content_append` 仅在服务真正支持时声明。`image` 只表示
+`markdown`、`streaming`、`image`、`content_append` 仅在服务真正支持时声明。`conversation_end`
+默认 `false`；仅当服务允许 Baton 发起共享 Conversation 的结束操作时才声明为 `true`，Baton
+不会因为服务存在 `:end` endpoint 而自行展示结束操作；服务端仍须自行鉴权。`image` 只表示
 服务会下发可读取的静态图片内容项，不是上传协商或设备权限。iOS 的本地语音能力
 不需要也不应在 V1.1 回传。未来若要支持 camera/file/approval 等双向能力，
 必须另行定义协商、授权与降级语义，不能把未知字段视为已经协商成功。
@@ -142,10 +144,10 @@ cancel 的 `202 cancellation_requested` 只代表服务已接受请求；执行�
 - [ ] SSE 返回 `text/event-stream; charset=utf-8`，能收到标准 `id/event/data` 格式的 `message.created`、`run.started`、`message.delta`、`message.completed`、`message.content.appended`、`run.completed`；使用 snapshot 的 `Last-Event-ID` 只恢复连续后续事件，未知/过期 cursor 只收到 `conversation.resync` 而非从头重复；客户端遇到 sequence gap 会取新 snapshot。
 - [ ] `media_id` 在 snapshot、SSE replay 和后续 snapshot 中不变；append 只追加完整 image 到 completed assistant message，重复 event 不重复渲染。
 - [ ] cancel 首次返回已接受，随后按“message cancelled → run.cancelled”获得唯一终态；重复取消不重复发布事件；DELETE 撤销后未来访问被拒绝。
-- [ ] 有 `conversation:close` 权限的 Web 与 Baton 均可 End；无权固定 `403 conversation_close_forbidden`。End 仅广播一条 `conversation.closed`，使所有 token/未决 pairing 失效，丢弃任何晚到的 Agent 输出；同 `Idempotency-Key` 重试不重复结束。下一段会话使用新 Conversation ID 与新事件序列。
+- [ ] 有 `conversation:close` 权限的 Web 可 End；Baton 还必须在 discovery 中获得 `conversation_end: true` 才展示并调用 End。无权固定 `403 conversation_close_forbidden`。End 仅广播一条 `conversation.closed`，使所有 token/未决 pairing 失效，丢弃任何晚到的 Agent 输出；同 `Idempotency-Key` 重试不重复结束。下一段会话使用新 Conversation ID 与新事件序列。
 - [ ] AG-UI V1 fixture 映射到上述 Baton 事件；未知 AG-UI 事件只进入诊断，不泄漏到 iOS wire format。
 - [ ] 所有 transport、proof、token、Cookie/CSRF 和日志脱敏检查通过；若选择 HTTP，已确认可信网络与 Baton 的未加密提示；LM Studio key 不出现在代码、文档、请求或 iOS 包内。
 
 ## V1.1 暂缓
 
-不因 Java 接入提前实现图片上传、相机/文件、Agent action approval（区别于网页确认设备 pairing）、Tool UI、generated UI、location、Face ID confirmation、push notification、WebSocket、账户体系或 Java SDK。除已定义的只读静态 `image` 外，能力声明可保留未来扩展键；服务和 iOS V1.1 只依赖 `text`、`markdown`、`streaming`、`image`、`content_append` 及设备端 `on_device_speech_to_text`。
+不因 Java 接入提前实现图片上传、相机/文件、Agent action approval（区别于网页确认设备 pairing）、Tool UI、generated UI、location、Face ID confirmation、push notification、WebSocket、账户体系或 Java SDK。除已定义的只读静态 `image` 外，能力声明可保留未来扩展键；服务和 iOS V1.1 只依赖 `text`、`markdown`、`streaming`、`image`、`content_append`、`conversation_end` 及设备端 `on_device_speech_to_text`。

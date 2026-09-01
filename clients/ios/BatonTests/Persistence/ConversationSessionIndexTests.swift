@@ -109,6 +109,51 @@ struct ConversationSessionIndexTests {
         #expect(summary.hasUnreadUpdates)
     }
 
+    @Test func localRenameIsIsolatedAndSurvivesAReplacementDeviceSession() {
+        let original = credential(sessionID: "session_1", conversationID: "conv_1")
+        let other = credential(sessionID: "session_2", conversationID: "conv_2")
+        let renamed = ConversationSessionIndex.renamingLocally(
+            conversationKey: original.conversationKey,
+            to: "现场设备",
+            in: [StoredConversationSession(credential: original), StoredConversationSession(credential: other)]
+        )
+        #expect(ConversationSessionSummary(renamed.first { $0.id == original.conversationKey }!).displayTitle == "现场设备")
+        #expect(ConversationSessionSummary(renamed.first { $0.id == other.conversationKey }!).displayTitle == other.conversation.title)
+
+        let replacement = credential(sessionID: "session_3", conversationID: "conv_1")
+        let updated = ConversationSessionIndex.upserting(replacement, into: renamed)
+        #expect(ConversationSessionSummary(updated.first { $0.id == replacement.conversationKey }!).displayTitle == "现场设备")
+    }
+
+    @Test func pinnedSessionsStayAboveRecentSessionsAndSurviveReplacement() {
+        let older = credential(sessionID: "session_1", conversationID: "conv_1")
+        let newer = credential(sessionID: "session_2", conversationID: "conv_2")
+        let initial = [
+            StoredConversationSession(credential: older, lastActivatedAt: Date(timeIntervalSince1970: 100)),
+            StoredConversationSession(credential: newer, lastActivatedAt: Date(timeIntervalSince1970: 200))
+        ]
+
+        let pinned = ConversationSessionIndex.settingPinned(
+            conversationKey: older.conversationKey,
+            to: true,
+            in: initial
+        )
+        #expect(pinned.map(\.id) == [older.conversationKey, newer.conversationKey])
+        #expect(ConversationSessionSummary(pinned[0]).isPinned)
+
+        let replacement = credential(sessionID: "session_3", conversationID: "conv_1")
+        let updated = ConversationSessionIndex.upserting(replacement, into: pinned, at: Date(timeIntervalSince1970: 300))
+        #expect(updated.first?.id == replacement.conversationKey)
+        #expect(updated.first?.isPinned == true)
+
+        let unpinned = ConversationSessionIndex.settingPinned(
+            conversationKey: replacement.conversationKey,
+            to: false,
+            in: updated
+        )
+        #expect(unpinned.map(\.id) == [replacement.conversationKey, newer.conversationKey])
+    }
+
     @Test func legacyStoredSessionDecodesWithAnUnknownReadBaseline() throws {
         let original = StoredConversationSession(
             credential: credential(sessionID: "session_1", conversationID: "conv_1"),
@@ -118,6 +163,10 @@ struct ConversationSessionIndexTests {
         object.removeValue(forKey: "lastReadCursor")
         object.removeValue(forKey: "lastSuccessfulSyncAt")
         object.removeValue(forKey: "latestObservedCursor")
+        object.removeValue(forKey: "isPinned")
+        var credentialObject = try #require(object["credential"] as? [String: Any])
+        credentialObject.removeValue(forKey: "canEndConversation")
+        object["credential"] = credentialObject
         let decoded = try JSONDecoder().decode(
             StoredConversationSession.self,
             from: JSONSerialization.data(withJSONObject: object)
@@ -127,6 +176,8 @@ struct ConversationSessionIndexTests {
         #expect(decoded.lastReadCursor == nil)
         #expect(decoded.lastSuccessfulSyncAt == nil)
         #expect(decoded.latestObservedCursor == nil)
+        #expect(!decoded.isPinned)
+        #expect(!decoded.credential.canEndConversation)
         #expect(!ConversationSessionSummary(decoded).hasUnreadUpdates)
     }
 

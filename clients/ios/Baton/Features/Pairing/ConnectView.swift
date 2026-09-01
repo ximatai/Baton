@@ -1,8 +1,16 @@
 import SwiftUI
 
 struct ConnectView: View {
+    /// The collection identity stays the Conversation key. The rendered row
+    /// additionally changes identity when pinning changes, so List does not
+    /// try to move a still-open UIKit swipe cell to its new position.
+    private struct SessionRowIdentity: Hashable {
+        let conversationKey: String
+        let isPinned: Bool
+    }
+
     private struct PendingSessionAction: Identifiable {
-        enum Kind { case disconnect, end }
+        enum Kind { case disconnect }
         let session: ConversationSessionSummary
         let kind: Kind
         var id: String { "\(kind)-\(session.id)" }
@@ -12,6 +20,8 @@ struct ConnectView: View {
     let scan: () -> Void
     let openSession: (String) -> Void
     @State private var pendingSessionAction: PendingSessionAction?
+    @State private var sessionBeingRenamed: ConversationSessionSummary?
+    @State private var renameTitle = ""
 
     var body: some View {
         Group {
@@ -37,30 +47,14 @@ struct ConnectView: View {
                             .buttonStyle(.plain)
                             .accessibilityLabel(accessibilityLabel(for: session))
                             .swipeActions(edge: .leading, allowsFullSwipe: false) {
-                                Button {
-                                    Task { await model.refreshSessionAvailability(sessionID: session.id) }
-                                } label: {
-                                    Label("检查", systemImage: "arrow.clockwise")
-                            }
-                            .tint(.blue)
+                                pinAction(for: session)
                             }
                             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                Button(role: .destructive) {
-                                    pendingSessionAction = PendingSessionAction(session: session, kind: .end)
-                                } label: {
-                                    Label("结束", systemImage: "xmark.circle")
-                                }
-                                Button {
-                                    pendingSessionAction = PendingSessionAction(session: session, kind: .disconnect)
-                                } label: {
-                                    Label("断开", systemImage: "rectangle.portrait.and.arrow.right")
-                                }
-                                .tint(.orange)
+                                renameAction(for: session)
+                                disconnectAction(for: session)
                             }
+                            .id(SessionRowIdentity(conversationKey: session.id, isPinned: session.isPinned))
                         }
-                    }
-                    if let error = model.errorMessage {
-                        Section { ErrorNotice(text: error, retry: model.retryLastConnection) }
                     }
                 }
                 .listStyle(.insetGrouped)
@@ -70,19 +64,17 @@ struct ConnectView: View {
             }
         }
         .background(Color(uiColor: .systemGroupedBackground))
-        .confirmationDialog(
-            confirmationTitle,
+        .alert(
+            "断开本机访问？",
             isPresented: Binding(
                 get: { pendingSessionAction != nil },
                 set: { if !$0 { pendingSessionAction = nil } }
-            ),
-            titleVisibility: .visible
+            )
         ) {
             if let action = pendingSessionAction {
-                Button(confirmationButtonTitle, role: .destructive) {
+                Button("断开", role: .destructive) {
                     switch action.kind {
                     case .disconnect: model.disconnectSavedSession(id: action.session.id)
-                    case .end: model.endSavedSession(id: action.session.id)
                     }
                     pendingSessionAction = nil
                 }
@@ -90,6 +82,24 @@ struct ConnectView: View {
             Button("取消", role: .cancel) { pendingSessionAction = nil }
         } message: {
             Text(confirmationMessage)
+        }
+        .alert(
+            "重命名对话",
+            isPresented: Binding(
+                get: { sessionBeingRenamed != nil },
+                set: { if !$0 { sessionBeingRenamed = nil } }
+            )
+        ) {
+            TextField("对话名称", text: $renameTitle)
+            Button("保存") {
+                if let sessionBeingRenamed {
+                    model.renameSavedSession(id: sessionBeingRenamed.id, title: renameTitle)
+                }
+                sessionBeingRenamed = nil
+            }
+            Button("取消", role: .cancel) { sessionBeingRenamed = nil }
+        } message: {
+            Text("仅修改该对话在这台 iPhone 上的展示名称。")
         }
     }
 
@@ -139,7 +149,7 @@ struct ConnectView: View {
                 .font(.title3)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(session.conversation.title).lineLimit(1)
+                    Text(session.displayTitle).lineLimit(1)
                     if session.hasUnreadUpdates {
                         Circle()
                             .fill(Color.accentColor)
@@ -158,7 +168,7 @@ struct ConnectView: View {
     }
 
     private func accessibilityLabel(for session: ConversationSessionSummary) -> String {
-        var result = "\(session.conversation.title)，\(session.service.name)"
+        var result = "\(session.displayTitle)，\(session.service.name)"
         if session.hasUnreadUpdates { result += "，有更新" }
         switch model.availability(for: session.id) {
         case .checking: result += "，正在检查可用性"
@@ -169,26 +179,42 @@ struct ConnectView: View {
         return result
     }
 
-    private var confirmationTitle: String {
-        switch pendingSessionAction?.kind {
-        case .disconnect: "断开本机访问？"
-        case .end: "结束这段对话？"
-        case nil: ""
+    private func disconnectAction(for session: ConversationSessionSummary) -> some View {
+        Button {
+            pendingSessionAction = PendingSessionAction(session: session, kind: .disconnect)
+        } label: {
+            Image(systemName: "rectangle.portrait.and.arrow.right")
         }
+        .tint(.orange)
+        .accessibilityLabel("断开本机访问")
     }
 
-    private var confirmationButtonTitle: String {
-        switch pendingSessionAction?.kind {
-        case .disconnect: "断开"
-        case .end: "结束对话"
-        case nil: ""
+    private func renameAction(for session: ConversationSessionSummary) -> some View {
+        Button {
+            renameTitle = session.displayTitle
+            sessionBeingRenamed = session
+        } label: {
+            Image(systemName: "pencil")
         }
+        .tint(.indigo)
+        .accessibilityLabel("重命名对话")
+    }
+
+    private func pinAction(for session: ConversationSessionSummary) -> some View {
+        Button {
+            withAnimation(.snappy) {
+                model.setSavedSessionPinned(id: session.id, pinned: !session.isPinned)
+            }
+        } label: {
+            Image(systemName: session.isPinned ? "pin.slash" : "pin")
+        }
+        .tint(session.isPinned ? .gray : .yellow)
+        .accessibilityLabel(session.isPinned ? "取消置顶" : "置顶")
     }
 
     private var confirmationMessage: String {
         switch pendingSessionAction?.kind {
-        case .disconnect: "将从本机移除“\(pendingSessionAction?.session.conversation.title ?? "")”的访问凭据和待发送消息；若服务端可访问，也会同时撤销该设备会话。"
-        case .end: "所有已加入“\(pendingSessionAction?.session.conversation.title ?? "")”的设备都会退出。"
+        case .disconnect: "将从这台 iPhone 断开此对话。"
         case nil: ""
         }
     }

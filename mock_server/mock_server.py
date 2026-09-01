@@ -704,7 +704,7 @@ create();
                 "endpoints": {"join": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/requests",
                               "approval": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/approval",
                               "conversation": f"{STORE.base_url}/v1/baton/conversations/{STORE.conversation_id}"},
-                "capabilities": {"text": True, "markdown": True, "streaming": True, "image": True, "content_append": True}})
+                "capabilities": {"text": True, "markdown": True, "streaming": True, "image": True, "content_append": True, "conversation_end": True}})
         if path.startswith(pairing_prefix) and path.endswith("/approval"):
             return self.approval_page(path[len(pairing_prefix):-len("/approval")].strip("/"))
         if path.startswith(pairing_prefix) and path.endswith("/qr"):

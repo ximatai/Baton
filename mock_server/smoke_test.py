@@ -86,7 +86,7 @@ pairing_id = pair["pairing_id"]
 status, discovery = request("/.well-known/baton/pair/" + pairing_id)
 assert status == 200 and discovery["conversation"]["id"].startswith("conv_") and "join" in discovery["endpoints"]
 assert discovery["protocol"] == "baton/1.1"
-assert discovery["capabilities"] == {"text": True, "markdown": True, "streaming": True, "image": True, "content_append": True}
+assert discovery["capabilities"] == {"text": True, "markdown": True, "streaming": True, "image": True, "content_append": True, "conversation_end": True}
 CONVERSATION_ID = discovery["conversation"]["id"]
 status, denied = request(f"/v1/baton/conversations/{CONVERSATION_ID}")
 assert status == 401 and denied["error"]["code"] == "invalid_token"

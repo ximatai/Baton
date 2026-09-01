@@ -17,6 +17,32 @@ struct SessionCredential: Codable, Equatable {
     let service: ServiceDescriptor
     let conversation: ConversationDescriptor
     let conversationEndpoint: URL
+    let canEndConversation: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case accessToken, deviceID, sessionID, service, conversation, conversationEndpoint, canEndConversation
+    }
+
+    init(accessToken: String, deviceID: String, sessionID: String, service: ServiceDescriptor, conversation: ConversationDescriptor, conversationEndpoint: URL, canEndConversation: Bool = false) {
+        self.accessToken = accessToken
+        self.deviceID = deviceID
+        self.sessionID = sessionID
+        self.service = service
+        self.conversation = conversation
+        self.conversationEndpoint = conversationEndpoint
+        self.canEndConversation = canEndConversation
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        accessToken = try container.decode(String.self, forKey: .accessToken)
+        deviceID = try container.decode(String.self, forKey: .deviceID)
+        sessionID = try container.decode(String.self, forKey: .sessionID)
+        service = try container.decode(ServiceDescriptor.self, forKey: .service)
+        conversation = try container.decode(ConversationDescriptor.self, forKey: .conversation)
+        conversationEndpoint = try container.decode(URL.self, forKey: .conversationEndpoint)
+        canEndConversation = try container.decodeIfPresent(Bool.self, forKey: .canEndConversation) ?? false
+    }
 
     /// A device session is replaceable; a saved-list item represents the
     /// server conversation at one service origin. Keep this stable when the
@@ -50,6 +76,11 @@ struct StoredConversationSession: Codable, Equatable, Identifiable {
     /// separate from `lastReadCursor` lets the list show a local update marker
     /// without claiming that the user has opened the conversation.
     let latestObservedCursor: EventCursor?
+    /// A device-only label. It never changes the server Conversation title.
+    let localTitle: String?
+    /// A device-only list preference. Pinned Conversations stay above the
+    /// normal recent-session order without changing server state.
+    let isPinned: Bool
 
     var id: String { credential.conversationKey }
 
@@ -58,17 +89,21 @@ struct StoredConversationSession: Codable, Equatable, Identifiable {
         lastActivatedAt: Date = .now,
         lastReadCursor: EventCursor? = nil,
         lastSuccessfulSyncAt: Date? = nil,
-        latestObservedCursor: EventCursor? = nil
+        latestObservedCursor: EventCursor? = nil,
+        localTitle: String? = nil,
+        isPinned: Bool = false
     ) {
         self.credential = credential
         self.lastActivatedAt = lastActivatedAt
         self.lastReadCursor = lastReadCursor
         self.lastSuccessfulSyncAt = lastSuccessfulSyncAt
         self.latestObservedCursor = latestObservedCursor
+        self.localTitle = localTitle
+        self.isPinned = isPinned
     }
 
     private enum CodingKeys: String, CodingKey {
-        case credential, lastActivatedAt, lastReadCursor, lastSuccessfulSyncAt, latestObservedCursor
+        case credential, lastActivatedAt, lastReadCursor, lastSuccessfulSyncAt, latestObservedCursor, localTitle, isPinned
     }
 
     /// Existing Keychain entries predate read-state metadata. Decode them as
@@ -80,6 +115,8 @@ struct StoredConversationSession: Codable, Equatable, Identifiable {
         lastReadCursor = try container.decodeIfPresent(EventCursor.self, forKey: .lastReadCursor)
         lastSuccessfulSyncAt = try container.decodeIfPresent(Date.self, forKey: .lastSuccessfulSyncAt)
         latestObservedCursor = try container.decodeIfPresent(EventCursor.self, forKey: .latestObservedCursor)
+        localTitle = try container.decodeIfPresent(String.self, forKey: .localTitle)
+        isPinned = try container.decodeIfPresent(Bool.self, forKey: .isPinned) ?? false
     }
 
     func markingRead(cursor: EventCursor, at date: Date) -> Self {
@@ -88,7 +125,9 @@ struct StoredConversationSession: Codable, Equatable, Identifiable {
             lastActivatedAt: lastActivatedAt,
             lastReadCursor: cursor,
             lastSuccessfulSyncAt: date,
-            latestObservedCursor: cursor
+            latestObservedCursor: cursor,
+            localTitle: localTitle,
+            isPinned: isPinned
         )
     }
 
@@ -99,7 +138,33 @@ struct StoredConversationSession: Codable, Equatable, Identifiable {
             lastActivatedAt: lastActivatedAt,
             lastReadCursor: lastReadCursor,
             lastSuccessfulSyncAt: lastSuccessfulSyncAt,
-            latestObservedCursor: cursor
+            latestObservedCursor: cursor,
+            localTitle: localTitle,
+            isPinned: isPinned
+        )
+    }
+
+    func renamingLocally(to title: String?) -> Self {
+        Self(
+            credential: credential,
+            lastActivatedAt: lastActivatedAt,
+            lastReadCursor: lastReadCursor,
+            lastSuccessfulSyncAt: lastSuccessfulSyncAt,
+            latestObservedCursor: latestObservedCursor,
+            localTitle: title,
+            isPinned: isPinned
+        )
+    }
+
+    func settingPinned(_ pinned: Bool) -> Self {
+        Self(
+            credential: credential,
+            lastActivatedAt: lastActivatedAt,
+            lastReadCursor: lastReadCursor,
+            lastSuccessfulSyncAt: lastSuccessfulSyncAt,
+            latestObservedCursor: latestObservedCursor,
+            localTitle: localTitle,
+            isPinned: pinned
         )
     }
 }
@@ -112,6 +177,8 @@ struct ConversationSessionSummary: Equatable, Identifiable {
     let lastActivatedAt: Date
     let lastSuccessfulSyncAt: Date?
     let hasUnreadUpdates: Bool
+    let displayTitle: String
+    let isPinned: Bool
 
     init(_ stored: StoredConversationSession) {
         id = stored.id
@@ -119,6 +186,8 @@ struct ConversationSessionSummary: Equatable, Identifiable {
         conversation = stored.credential.conversation
         lastActivatedAt = stored.lastActivatedAt
         lastSuccessfulSyncAt = stored.lastSuccessfulSyncAt
+        displayTitle = stored.localTitle ?? stored.credential.conversation.title
+        isPinned = stored.isPinned
         if let lastReadCursor = stored.lastReadCursor,
            let latestObservedCursor = stored.latestObservedCursor {
             hasUnreadUpdates = latestObservedCursor.sequence > lastReadCursor.sequence
@@ -142,10 +211,11 @@ enum ConversationSessionIndex {
             lastActivatedAt: date,
             lastReadCursor: existing?.credential == credential ? existing?.lastReadCursor : nil,
             lastSuccessfulSyncAt: existing?.credential == credential ? existing?.lastSuccessfulSyncAt : nil,
-            latestObservedCursor: existing?.credential == credential ? existing?.latestObservedCursor : nil
+            latestObservedCursor: existing?.credential == credential ? existing?.latestObservedCursor : nil,
+            localTitle: existing?.localTitle,
+            isPinned: existing?.isPinned ?? false
         )
-        return ([replacement] + sessions.filter { $0.id != replacement.id })
-            .sorted { $0.lastActivatedAt > $1.lastActivatedAt }
+        return sorted([replacement] + sessions.filter { $0.id != replacement.id })
     }
 
     static func removing(
@@ -156,8 +226,7 @@ enum ConversationSessionIndex {
     }
 
     static func deduplicating(_ sessions: [StoredConversationSession]) -> [StoredConversationSession] {
-        sessions
-            .sorted { $0.lastActivatedAt > $1.lastActivatedAt }
+        sorted(sessions)
             .reduce(into: [StoredConversationSession]()) { result, session in
                 if !result.contains(where: { $0.id == session.id }) { result.append(session) }
             }
@@ -185,6 +254,30 @@ enum ConversationSessionIndex {
             session.id == credential.conversationKey && session.credential == credential
                 ? session.recordingObserved(cursor: cursor)
                 : session
+        }
+    }
+
+    static func renamingLocally(
+        conversationKey: String,
+        to title: String?,
+        in sessions: [StoredConversationSession]
+    ) -> [StoredConversationSession] {
+        sessions.map { $0.id == conversationKey ? $0.renamingLocally(to: title) : $0 }
+    }
+
+    static func settingPinned(
+        conversationKey: String,
+        to pinned: Bool,
+        in sessions: [StoredConversationSession]
+    ) -> [StoredConversationSession] {
+        sorted(sessions.map { $0.id == conversationKey ? $0.settingPinned(pinned) : $0 })
+    }
+
+    private static func sorted(_ sessions: [StoredConversationSession]) -> [StoredConversationSession] {
+        sessions.sorted {
+            if $0.isPinned != $1.isPinned { return $0.isPinned && !$1.isPinned }
+            if $0.lastActivatedAt != $1.lastActivatedAt { return $0.lastActivatedAt > $1.lastActivatedAt }
+            return $0.id < $1.id
         }
     }
 }

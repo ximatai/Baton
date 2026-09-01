@@ -34,13 +34,15 @@ struct ContentView: View {
             }
             .navigationDestination(for: String.self) { _ in
                 ConversationView(model: model)
-                    .navigationTitle(model.conversation?.title ?? "Baton")
+                    .navigationTitle(model.activeConversationTitle)
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .topBarTrailing) {
                             Menu {
                                 Button("重新连接", systemImage: "arrow.clockwise") { model.reconnect() }
-                                Button("结束对话", systemImage: "xmark.circle", role: .destructive) { isEndConfirmationPresented = true }
+                                if model.canEndActiveConversation {
+                                    Button("结束对话", systemImage: "xmark.circle", role: .destructive) { isEndConfirmationPresented = true }
+                                }
                                 Button("断开本次会话", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) { model.disconnect() }
                             } label: { Image(systemName: "ellipsis.circle") }
                         }

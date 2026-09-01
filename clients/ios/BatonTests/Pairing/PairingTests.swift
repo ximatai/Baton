@@ -45,6 +45,13 @@ struct PairingTests {
         #expect(manual.approvalMode == .manual)
         #expect(manual.capabilities.image)
         #expect(manual.capabilities.contentAppend)
+        #expect(!manual.capabilities.conversationEnd)
+        let endEnabledJSON = base.replacingOccurrences(
+            of: #""content_append":true"#,
+            with: #""content_append":true,"conversation_end":true"#
+        )
+        let endEnabled = try JSONDecoder().decode(PairingDocument.self, from: Data(endEnabledJSON.utf8))
+        #expect(endEnabled.capabilities.conversationEnd)
         let autoJSON = String(base.dropLast()) + #","approval_mode":"auto"}"#
         let auto = try JSONDecoder().decode(PairingDocument.self, from: Data(autoJSON.utf8))
         #expect(auto.approvalMode == .auto)

@@ -16,18 +16,23 @@ struct BatonCapabilities: Codable, Equatable {
     let streaming: Bool
     let image: Bool
     let contentAppend: Bool
+    /// A shared Conversation lifecycle operation; false unless the service
+    /// explicitly declares that Baton may invoke it.
+    let conversationEnd: Bool
 
     enum CodingKeys: String, CodingKey {
         case text, markdown, streaming, image
         case contentAppend = "content_append"
+        case conversationEnd = "conversation_end"
     }
 
-    init(text: Bool = true, markdown: Bool = false, streaming: Bool = false, image: Bool = false, contentAppend: Bool = false) {
+    init(text: Bool = true, markdown: Bool = false, streaming: Bool = false, image: Bool = false, contentAppend: Bool = false, conversationEnd: Bool = false) {
         self.text = text
         self.markdown = markdown
         self.streaming = streaming
         self.image = image
         self.contentAppend = contentAppend
+        self.conversationEnd = conversationEnd
     }
 
     init(from decoder: Decoder) throws {
@@ -37,6 +42,7 @@ struct BatonCapabilities: Codable, Equatable {
         streaming = try container.decodeIfPresent(Bool.self, forKey: .streaming) ?? false
         image = try container.decodeIfPresent(Bool.self, forKey: .image) ?? false
         contentAppend = try container.decodeIfPresent(Bool.self, forKey: .contentAppend) ?? false
+        conversationEnd = try container.decodeIfPresent(Bool.self, forKey: .conversationEnd) ?? false
     }
 }
 

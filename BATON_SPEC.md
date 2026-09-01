@@ -175,7 +175,7 @@ app render a trustworthy pending-connection screen and submit a join request.
     "approval": "https://agent.example.com/v1/baton/pairings/ps_7KDX23/approval",
     "conversation": "https://agent.example.com/v1/baton/conversations/conv_01J..."
   },
-  "capabilities": { "text": true, "markdown": true, "streaming": true, "image": true, "content_append": true }
+  "capabilities": { "text": true, "markdown": true, "streaming": true, "image": true, "content_append": true, "conversation_end": false }
 }
 ```
 
@@ -189,7 +189,10 @@ and must be `true`; `markdown`, `streaming`, `image`, and `content_append` decla
 behavior. `image: true` means the server may emit the read-only `image` content
 item below; `content_append: true` means it may emit the persisted append event
 defined below. These are declarations, not negotiation: neither authorizes
-image upload or access to arbitrary URLs.
+image upload or access to arbitrary URLs. `conversation_end` defaults to `false`;
+only `true` declares that Baton may invoke the shared Conversation's `:end`
+operation. Clients must not expose an End control when it is absent or false;
+the server remains responsible for authorization.
 A client may safely ignore an unknown key. Remote icon URLs are optional and
 should be fetched as untrusted content.
 
@@ -495,7 +498,10 @@ it is not a request for device capabilities and it does not grant permission.
 when implemented. `image` covers only server-to-client static-image display;
 it is neither an upload capability nor a device permission. The iOS app is
 voice-capable by local product design, but it does not advertise that fact on
-the wire in V1.1.
+the wire in V1.1. `conversation_end` defaults to `false`; declare it as `true`
+only when the service permits Baton to invoke End for the shared Conversation.
+A missing or false value means the client must not show an End operation; the
+server still enforces authorization.
 
 Bidirectional capability negotiation, per-device capabilities, and future keys
 such as `camera`, `file`, `approval`, `location`, and `notification` are

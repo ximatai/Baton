@@ -112,6 +112,11 @@ final class BatonViewModel: ObservableObject {
     }
     var isAutoApprovedPairing: Bool { pendingApprovalMode == .auto }
     var activeSessionID: String? { credential?.conversationKey }
+    var canEndActiveConversation: Bool { credential?.canEndConversation == true }
+    var activeConversationTitle: String {
+        guard let credential else { return conversation?.title ?? "Baton" }
+        return savedSessions.first(where: { $0.id == credential.conversationKey })?.displayTitle ?? conversation?.title ?? "Baton"
+    }
 
     init() {
         let key = "baton.device-id"
@@ -257,7 +262,7 @@ final class BatonViewModel: ObservableObject {
     }
 
     func endConversation() {
-        guard let credential else { return }
+        guard let credential, credential.canEndConversation else { return }
         let idempotencyKey = endIdempotencyKey ?? UUID()
         endIdempotencyKey = idempotencyKey
         Task {
@@ -351,50 +356,15 @@ final class BatonViewModel: ObservableObject {
     }
 
     func disconnectSavedSession(id: String) {
-        Task {
-            var capturedCredential: SessionCredential?
-            do {
-                guard let session = try KeychainStore.loadSessions().first(where: { $0.id == id }) else { return }
-                capturedCredential = session.credential
-                sessionAvailability[id] = .checking
-                try await api.revoke(
-                    endpoint: session.credential.conversationEndpoint,
-                    token: session.credential.accessToken,
-                    deviceID: session.credential.deviceID,
-                    sessionID: session.credential.sessionID
-                )
-                removeSavedSessionLocally(session.credential)
-            } catch {
-                // Disconnect means this device must stop retaining access even
-                // when the server cannot be reached. The user is told that a
-                // remote revocation could not be confirmed.
-                if let capturedCredential, removeSavedSessionLocally(capturedCredential) {
-                    errorMessage = String(localized: "未能通知服务端，已仅从本机断开；远端会话可能仍有效。")
-                }
-            }
-        }
-    }
-
-    func endSavedSession(id: String) {
-        Task {
-            var capturedCredential: SessionCredential?
-            do {
-                guard let session = try KeychainStore.loadSessions().first(where: { $0.id == id }) else { return }
-                capturedCredential = session.credential
-                sessionAvailability[id] = .checking
-                try await api.endConversation(
-                    endpoint: session.credential.conversationEndpoint,
-                    token: session.credential.accessToken,
-                    idempotencyKey: UUID()
-                )
-                removeSavedSessionLocally(session.credential)
-            } catch {
-                if isConversationClosed(error) {
-                    if let capturedCredential { removeSavedSessionLocally(capturedCredential) }
-                } else {
-                    if let capturedCredential { handleSavedSessionOperationFailure(error, session: capturedCredential) }
-                }
-            }
+        do {
+            guard let session = try KeychainStore.loadSessions().first(where: { $0.id == id }) else { return }
+            // This is a device-data operation first. A dead server must not
+            // keep credentials, durable history, media, or outbox items on
+            // the phone or keep the entry visible in its local list.
+            guard removeSavedSessionLocally(session.credential) else { return }
+            revokeRemoteSessionBestEffort(session.credential)
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -417,6 +387,28 @@ final class BatonViewModel: ObservableObject {
         }
     }
 
+    func renameSavedSession(id: String, title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            guard let session = try KeychainStore.loadSessions().first(where: { $0.id == id }) else { return }
+            let localTitle = trimmed.isEmpty || trimmed == session.credential.conversation.title ? nil : trimmed
+            updateSavedSessions(try KeychainStore.renameConversationLocally(conversationKey: id, title: localTitle))
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func setSavedSessionPinned(id: String, pinned: Bool) {
+        do {
+            updateSavedSessions(try KeychainStore.setConversationPinnedLocally(
+                conversationKey: id,
+                pinned: pinned
+            ))
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func retryLastConnection() {
         if let pendingPairing { beginWaitingForApproval(pendingPairing) }
         else if let lastPairingURL { connect(pairingURL: lastPairingURL) }
@@ -428,30 +420,20 @@ final class BatonViewModel: ObservableObject {
 
     func disconnect() {
         guard let credential else { cancelPendingPairing(); return }
-        shouldMaintainConnection = false; snapshotTask?.cancel(); snapshotTask = nil; streamTask?.cancel(); streamTask = nil
-        isConnected = false; connectionStatus = String(localized: "正在撤销服务器会话…"); errorMessage = nil
-        Task {
-            do {
-                try await api.revoke(endpoint: credential.conversationEndpoint, token: credential.accessToken, deviceID: credential.deviceID, sessionID: credential.sessionID)
-                removeLocalSession(matching: credential)
-            } catch {
-                if isConversationClosed(error) {
-                    closeConversation(matching: credential)
-                } else if isInvalidToken(error) {
-                    // The user explicitly chose to disconnect this device. A
-                    // server-side revocation that already happened has the
-                    // same intended local result.
-                    removeLocalSession(matching: credential)
-                } else {
-                    // The explicit user action still has a useful local
-                    // meaning when a server cannot be reached: this device
-                    // discards its credential and queued messages.
-                    if removeLocalSession(matching: credential) {
-                        connectionStatus = String(localized: "已仅从本机断开")
-                        errorMessage = "\(String(localized: "未能通知服务端；远端会话可能仍有效。"))\n\(error.localizedDescription)"
-                    }
-                }
-            }
+        guard removeLocalSession(matching: credential) else { return }
+        revokeRemoteSessionBestEffort(credential)
+    }
+
+    /// Remote revocation is deliberately best-effort. Once the user removes a
+    /// Conversation from this device, no credential is retained for a retry.
+    private func revokeRemoteSessionBestEffort(_ session: SessionCredential) {
+        Task { [api] in
+            _ = try? await api.revoke(
+                endpoint: session.conversationEndpoint,
+                token: session.accessToken,
+                deviceID: session.deviceID,
+                sessionID: session.sessionID
+            )
         }
     }
 
@@ -834,7 +816,8 @@ final class BatonViewModel: ObservableObject {
                         sessionID: issuedSessionID,
                         service: pending.document.service,
                         conversation: issuedConversation,
-                        conversationEndpoint: pending.document.endpoints.conversation
+                        conversationEndpoint: pending.document.endpoints.conversation,
+                        canEndConversation: pending.document.capabilities.conversationEnd
                     )
                     // The only point at which a SessionCredential is written.
                     updateSavedSessions(try KeychainStore.upsertSession(newCredential))
@@ -1014,9 +997,11 @@ final class BatonViewModel: ObservableObject {
     }
 
     private func updateSavedSessions(_ sessions: [StoredConversationSession]) {
-        savedSessions = sessions
-            .sorted { $0.lastActivatedAt > $1.lastActivatedAt }
-            .map(ConversationSessionSummary.init)
+        // KeychainStore returns ConversationSessionIndex's canonical order:
+        // pinned items first, then each group by most recent activation.
+        // Do not apply a second recency-only sort here or it would erase the
+        // user's device-local pinning preference.
+        savedSessions = sessions.map(ConversationSessionSummary.init)
         sessionAvailability = sessionAvailability.filter { key, _ in
             savedSessions.contains { $0.id == key }
         }
