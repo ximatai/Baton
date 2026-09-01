@@ -7,7 +7,9 @@ enum KeychainStore {
     private static let legacySessionAccount = "active-companion-session"
     private static let sessionsAccount = "companion-sessions"
     private static let pendingPairingAccount = "pending-companion-pairing"
-    private static let outboxAccount = "pending-conversation-outbox"
+    /// V1 stored unsent message bodies in Keychain. Baton no longer promises
+    /// offline delivery, so remove that retired payload on launch.
+    private static let retiredOutboxAccount = "pending-conversation-outbox"
 
     static func loadSessions() throws -> [StoredConversationSession] {
         if let sessions = try load([StoredConversationSession].self, account: sessionsAccount) {
@@ -126,16 +128,7 @@ enum KeychainStore {
 
     static func deletePending() { delete(account: pendingPairingAccount) }
 
-    static func loadOutbox() throws -> [PendingOutboxMessage] {
-        try load([PendingOutboxMessage].self, account: outboxAccount) ?? []
-    }
-
-    static func saveOutbox(_ messages: [PendingOutboxMessage]) throws {
-        if messages.isEmpty { delete(account: outboxAccount) }
-        else { try save(messages, account: outboxAccount) }
-    }
-
-    static func deleteOutbox() { delete(account: outboxAccount) }
+    static func deleteRetiredOutbox() { delete(account: retiredOutboxAccount) }
 
     private static func save<Value: Encodable>(_ value: Value, account: String) throws {
         let data = try JSONEncoder().encode(value)

@@ -1,8 +1,8 @@
 import Foundation
 
 /// A durable, read-only replica of one paired Conversation. It intentionally
-/// contains no credential, proof, or outbox item: the server remains the only
-/// source of truth and every outgoing request remains Keychain-backed.
+/// contains no credential or proof: the server remains the only
+/// source of truth.
 nonisolated struct ConversationLocalStore: Sendable {
     struct CachedSnapshot: Codable {
         let conversation: ConversationDescriptor

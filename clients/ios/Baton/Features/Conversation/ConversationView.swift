@@ -18,14 +18,6 @@ struct ConversationView: View {
                     LazyVStack(spacing: 14) {
                         if model.messages.isEmpty { ConversationEmptyState() }
                         ForEach(model.messages) { message in MessageBubble(message: message, imageLoader: model.imageLoader).id(message.id) }
-                        ForEach(model.pendingOutbox) { item in
-                            PendingOutboxMessageCard(
-                                item: item,
-                                retry: { model.retryOutboxMessage(id: item.id) },
-                                discard: { model.discardOutboxMessage(id: item.id) }
-                            )
-                            .id("outbox-\(item.id)")
-                        }
                     }
                     .frame(maxWidth: 680)
                     .padding(.horizontal, 16)
@@ -53,17 +45,29 @@ struct ConversationView: View {
                         if !model.voiceState.isWorking { Spacer(); Button("知道了") { model.dismissVoiceIssue() }.font(.footnote.bold()) }
                     }.padding(.horizontal, 4)
                 }
+                if let message = model.composerUnavailableMessage {
+                    Label(message, systemImage: "wifi.slash")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                }
                 HStack(alignment: .center, spacing: 10) {
                     HStack(alignment: .center, spacing: 8) {
-                        TextField("输入消息", text: $model.composerText, axis: .vertical)
+                        TextField(
+                            model.composerUnavailableMessage ?? String(localized: "输入消息"),
+                            text: $model.composerText,
+                            axis: .vertical
+                        )
                             .lineLimit(1...5)
                             .focused($isComposerFocused)
                             .submitLabel(.send)
                             .onSubmit { model.send() }
-                        Image(systemName: model.voiceState.isRecording ? "waveform" : "mic")
+                        Image(systemName: microphoneSymbolName)
                             .font(.body.weight(.semibold))
                             .foregroundStyle(
-                                model.voiceState.isRecording ? .red : Color.accentColor
+                                model.isComposerDisabled
+                                    ? Color.secondary
+                                    : model.voiceState.isRecording ? .red : Color.accentColor
                             )
                             .frame(width: 28, height: 28)
                             .accessibilityHidden(true)
@@ -115,5 +119,10 @@ struct ConversationView: View {
     private func beginVoiceInput() {
         isComposerFocused = false
         model.beginVoiceInput()
+    }
+
+    private var microphoneSymbolName: String {
+        if model.isComposerDisabled { return "mic.slash" }
+        return model.voiceState.isRecording ? "waveform" : "mic"
     }
 }

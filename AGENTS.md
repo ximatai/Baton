@@ -20,9 +20,9 @@ clients/ios/Baton: App → Features → Core → Apple frameworks / URLSession /
 
 - `Core/Protocol` 是唯一网络信任边界；只在此处处理 HTTP(S)、同源、Bearer 和 SSE。
 - `Core/Conversation` 是纯 reducer；不得依赖 SwiftUI、Keychain 或网络。
-- 凭据、proof、outbox 只能放 Keychain。
+- 凭据与 proof 只能放 Keychain。
 - QR 扫描器只返回 URL；Speech service 只负责听写；View 不直接访问 Keychain/API。
-- 图片仅由 `Core/Protocol` 以同源 Bearer 请求；禁止重定向和 URLSession/URLCache 持久化。已配对 Conversation 的已确认快照与已下载媒体可按 `media_id` 存入 App 私有、文件保护且不参与备份的会话副本；移除配对、凭据失效或会话撤销时必须删除该副本。凭据、proof、Cookie 与 outbox 绝不进入该目录。
+- 图片仅由 `Core/Protocol` 以同源 Bearer 请求；禁止重定向和 URLSession/URLCache 持久化。已配对 Conversation 的已确认快照与已下载媒体可按 `media_id` 存入 App 私有、文件保护且不参与备份的会话副本；移除配对、凭据失效或会话撤销时必须删除该副本。凭据、proof 与 Cookie 绝不进入该目录。
 - 当前单一 `BatonViewModel` 是 V1 协调器。不要提前引入 TCA、多模块、SwiftData 或 DI 框架。
 
 ## 安全

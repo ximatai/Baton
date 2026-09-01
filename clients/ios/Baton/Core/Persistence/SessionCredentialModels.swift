@@ -329,39 +329,3 @@ enum ConversationSessionSyncValidity {
         maintainsConnection && !isTaskCancelled && activeCredential == candidate
     }
 }
-
-/// An unsent message is Keychain-backed before its request begins. It is only
-/// replayed when the exact saved session and conversation are restored.
-struct PendingOutboxMessage: Codable, Equatable, Identifiable {
-    let clientMessageID: String
-    let text: String
-    let conversationID: String
-    let conversationEndpoint: URL
-    let sessionID: String
-    let deviceID: String
-
-    var id: String { clientMessageID }
-
-    init(clientMessageID: UUID = UUID(), text: String, credential: SessionCredential) {
-        self.clientMessageID = clientMessageID.uuidString
-        self.text = text
-        conversationID = credential.conversation.id
-        conversationEndpoint = credential.conversationEndpoint
-        sessionID = credential.sessionID
-        deviceID = credential.deviceID
-    }
-
-    func belongs(to credential: SessionCredential) -> Bool {
-        conversationID == credential.conversation.id &&
-            conversationEndpoint == credential.conversationEndpoint &&
-            sessionID == credential.sessionID &&
-            deviceID == credential.deviceID
-    }
-
-    func belongs(toConversationOf credential: SessionCredential) -> Bool {
-        conversationID == credential.conversation.id &&
-            conversationEndpoint.scheme?.lowercased() == credential.conversationEndpoint.scheme?.lowercased() &&
-            conversationEndpoint.host?.lowercased() == credential.conversationEndpoint.host?.lowercased() &&
-            conversationEndpoint.port == credential.conversationEndpoint.port
-    }
-}
