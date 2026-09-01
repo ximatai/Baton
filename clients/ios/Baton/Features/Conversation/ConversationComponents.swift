@@ -166,3 +166,56 @@ struct ErrorNotice: View {
         .padding(.horizontal, 16)
     }
 }
+
+struct PendingOutboxMessageCard: View {
+    let item: OutboxItemPresentation
+    let retry: () -> Void
+    let discard: () -> Void
+    @State private var confirmsDiscard = false
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: symbolName)
+                .foregroundStyle(.orange)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(stateTitle).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                Text(item.message.text).font(.body).lineLimit(3)
+            }
+            Spacer(minLength: 4)
+            if item.state.canRetry {
+                Button("重试", action: retry).font(.footnote.bold())
+            } else {
+                ProgressView().controlSize(.small)
+            }
+            Button(role: .destructive) { confirmsDiscard = true } label: {
+                Image(systemName: "trash")
+            }
+            .accessibilityLabel("放弃待发送消息")
+        }
+        .padding(12)
+        .background(.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .confirmationDialog("放弃这条待发送消息？", isPresented: $confirmsDiscard, titleVisibility: .visible) {
+            Button("放弃消息", role: .destructive, action: discard)
+        } message: {
+            Text("它将从本机安全待发送箱移除。原请求可能已到达服务端，因此不能编辑后重发。")
+        }
+    }
+
+    private var symbolName: String {
+        switch item.state {
+        case .sending: "paperplane.circle"
+        case .retrying: "arrow.clockwise.circle"
+        case .queued, .needsUserAction: "exclamationmark.arrow.triangle.2.circlepath"
+        }
+    }
+
+    private var stateTitle: String {
+        switch item.state {
+        case .queued: "等待发送"
+        case .sending: "正在发送"
+        case .retrying: "正在重试"
+        case .needsUserAction: "等待你重试"
+        }
+    }
+}

@@ -18,6 +18,14 @@ struct ConversationView: View {
                     LazyVStack(spacing: 14) {
                         if model.messages.isEmpty { ConversationEmptyState() }
                         ForEach(model.messages) { message in MessageBubble(message: message, imageLoader: model.imageLoader).id(message.id) }
+                        ForEach(model.pendingOutbox) { item in
+                            PendingOutboxMessageCard(
+                                item: item,
+                                retry: { model.retryOutboxMessage(id: item.id) },
+                                discard: { model.discardOutboxMessage(id: item.id) }
+                            )
+                            .id("outbox-\(item.id)")
+                        }
                     }
                     .frame(maxWidth: 680)
                     .padding(.horizontal, 16)

@@ -65,6 +65,9 @@ final class BatonViewModel: ObservableObject {
     /// connection; summaries intentionally contain no session credential.
     @Published private(set) var savedSessions: [ConversationSessionSummary] = []
     @Published private(set) var sessionAvailability: [String: ConversationAvailability] = [:]
+    /// The selected conversation's Keychain-backed outbox, with in-memory
+    /// delivery state. No message content is duplicated outside Keychain.
+    @Published private(set) var pendingOutbox: [OutboxItemPresentation] = []
     /// Owns the in-memory, authenticated media cache for the selected
     /// conversation. Views receive this narrow loader, never a credential.
     @Published private(set) var imageLoader: BatonImageLoader?
@@ -80,6 +83,10 @@ final class BatonViewModel: ObservableObject {
     private var shouldMaintainConnection = false
     private var reconnectAttempt = 0
     private var outboxRetryTask: Task<Void, Never>?
+    private var outboxStates: [String: OutboxDeliveryState] = [:]
+    /// A persisted request may have one active delivery chain at most. This
+    /// prevents an explicit retry and connection flush from POSTing together.
+    private var outboxDeliveryRegistry = OutboxDeliveryRegistry()
     /// Retained until this End operation reaches a terminal local outcome, so
     /// an explicit retry after a lost response remains server-idempotent.
     private var endIdempotencyKey: UUID?
@@ -186,14 +193,51 @@ final class BatonViewModel: ObservableObject {
         Task {
             do {
                 try appendOutbox(pending)
+                refreshOutboxPresentation(for: credential)
                 errorMessage = nil
-                await deliver(pending, using: credential, attemptsRemaining: 3)
+                await startDelivery(pending, using: credential)
             } catch {
                 // The text has already left the composer by explicit user action;
                 // do not let a failed persistence attempt make a sent transcript
                 // reappear as if it were still unsent.
                 errorMessage = "\(String(localized: "消息未能安全暂存，请重新输入。"))\n\(error.localizedDescription)"
             }
+        }
+    }
+
+    /// Retries the exact persisted request. It never creates a new UUID or
+    /// changes text: after an ambiguous network failure, either action could
+    /// produce a second server-side message with different semantics.
+    func retryOutboxMessage(id: String) {
+        guard let credential else { return }
+        Task {
+            do {
+                guard let pending = try KeychainStore.loadOutbox().first(where: {
+                    $0.clientMessageID == id && $0.belongs(to: credential)
+                }) else { return }
+                guard outboxStates[id]?.canRetry ?? true else { return }
+                errorMessage = nil
+                await startDelivery(pending, using: credential)
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    /// Discard is local-only and requires an explicit UI confirmation. It does
+    /// not attempt cancellation because the original request may already have
+    /// reached the service.
+    func discardOutboxMessage(id: String) {
+        guard let credential else { return }
+        do {
+            let remaining = try KeychainStore.loadOutbox().filter {
+                !($0.clientMessageID == id && $0.belongs(to: credential))
+            }
+            try KeychainStore.saveOutbox(remaining)
+            outboxStates[id] = nil
+            refreshOutboxPresentation(for: credential)
+        } catch {
+            errorMessage = error.localizedDescription
         }
     }
 
@@ -434,6 +478,7 @@ final class BatonViewModel: ObservableObject {
         streamTask?.cancel(); isBusy = false; isConnected = true; connectionStatus = "\(String(localized: "已连接")) · \(credential.service.name)"
         sessionAvailability[credential.conversationKey] = .available
         let startAfter = reducer.cursor?.id
+        refreshOutboxPresentation(for: credential)
         outboxRetryTask?.cancel()
         outboxRetryTask = Task { [weak self] in await self?.flushOutbox(using: credential) }
         streamTask = Task { [weak self, api] in
@@ -473,7 +518,13 @@ final class BatonViewModel: ObservableObject {
         }
         switch event.type {
         case "message.created":
-            if let message = decodeMessage(event.data), let id = message.clientMessageID { removeOutbox(id) }
+            if let message = decodeMessage(event.data),
+               let id = message.clientMessageID,
+               let pending = try? KeychainStore.loadOutbox().first(where: {
+                   $0.clientMessageID == id && $0.belongs(to: credential)
+               }) {
+                removeOutbox(pending, using: credential)
+            }
         case "message.delta":
             if activeRunID != nil { agentActivity = .responding }
         case "message.failed":
@@ -523,10 +574,14 @@ final class BatonViewModel: ObservableObject {
         try KeychainStore.saveOutbox(outbox)
     }
 
-    private func removeOutbox(_ clientMessageID: String) {
+    private func removeOutbox(_ pending: PendingOutboxMessage, using credential: SessionCredential) {
         do {
-            let remaining = try KeychainStore.loadOutbox().filter { $0.clientMessageID != clientMessageID }
+            let remaining = try KeychainStore.loadOutbox().filter {
+                !($0 == pending && $0.belongs(to: credential))
+            }
             try KeychainStore.saveOutbox(remaining)
+            outboxStates[pending.clientMessageID] = nil
+            refreshOutboxPresentation(for: credential)
         } catch {
             // Retention is safe: retrying this same UUID is idempotent.
             errorMessage = error.localizedDescription
@@ -536,16 +591,39 @@ final class BatonViewModel: ObservableObject {
     private func deliver(_ pending: PendingOutboxMessage, using credential: SessionCredential, attemptsRemaining: Int) async {
         guard pending.belongs(to: credential), credential == self.credential else { return }
         do {
+            guard try isOutboxMessagePersisted(pending, for: credential) else { return }
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        setOutboxState(.sending, for: pending, credential: credential)
+        do {
             guard let id = UUID(uuidString: pending.clientMessageID) else { throw CompanionAPIError.invalidResponse }
             let message = try await api.send(endpoint: credential.conversationEndpoint, token: credential.accessToken, text: pending.text, clientMessageID: id)
+            // A request may finish after a session switch or local discard.
+            // Neither may merge stale data into the selected conversation.
+            guard credential == self.credential,
+                  try isOutboxMessagePersisted(pending, for: credential) else { return }
             merge(message)
-            removeOutbox(pending.clientMessageID)
+            removeOutbox(pending, using: credential)
         } catch {
+            guard credential == self.credential else { return }
+            do {
+                guard try isOutboxMessagePersisted(pending, for: credential) else { return }
+            } catch {
+                errorMessage = error.localizedDescription
+                return
+            }
             if isConversationClosed(error) || isInvalidToken(error) {
                 discardTerminatedActiveSession(error, matching: credential)
                 return
             }
-            guard attemptsRemaining > 1, shouldMaintainConnection else {
+            let nextState = OutboxPresentation.stateAfterFailure(
+                attemptsRemaining: attemptsRemaining,
+                maintainsConnection: shouldMaintainConnection
+            )
+            setOutboxState(nextState, for: pending, credential: credential)
+            guard nextState == .retrying else {
                 errorMessage = "\(String(localized: "消息已安全暂存，将在下次连接时以原始请求重试。"))\n\(error.localizedDescription)"
                 return
             }
@@ -560,9 +638,44 @@ final class BatonViewModel: ObservableObject {
         do {
             for message in try KeychainStore.loadOutbox().filter({ $0.belongs(to: credential) }) {
                 guard !Task.isCancelled else { return }
-                await deliver(message, using: credential, attemptsRemaining: 3)
+                await startDelivery(message, using: credential)
             }
         } catch { errorMessage = error.localizedDescription }
+    }
+
+    private func startDelivery(_ pending: PendingOutboxMessage, using credential: SessionCredential) async {
+        guard outboxDeliveryRegistry.claim(pending) else { return }
+        defer { outboxDeliveryRegistry.release(pending) }
+        await deliver(pending, using: credential, attemptsRemaining: 3)
+    }
+
+    private func isOutboxMessagePersisted(
+        _ pending: PendingOutboxMessage,
+        for credential: SessionCredential
+    ) throws -> Bool {
+        OutboxPresentation.contains(pending, in: try KeychainStore.loadOutbox(), for: credential)
+    }
+
+    private func setOutboxState(
+        _ state: OutboxDeliveryState,
+        for pending: PendingOutboxMessage,
+        credential: SessionCredential
+    ) {
+        guard pending.belongs(to: credential), credential == self.credential else { return }
+        outboxStates[pending.clientMessageID] = state
+        refreshOutboxPresentation(for: credential)
+    }
+
+    private func refreshOutboxPresentation(for credential: SessionCredential) {
+        do {
+            let messages = try KeychainStore.loadOutbox().filter { $0.belongs(to: credential) }
+            let knownIDs = Set(messages.map(\.clientMessageID))
+            outboxStates = outboxStates.filter { knownIDs.contains($0.key) }
+            pendingOutbox = OutboxPresentation.items(from: messages, states: outboxStates)
+        } catch {
+            pendingOutbox = []
+            errorMessage = error.localizedDescription
+        }
     }
 
     @discardableResult
@@ -574,6 +687,7 @@ final class BatonViewModel: ObservableObject {
         outboxRetryTask?.cancel(); outboxRetryTask = nil
         let persistenceError = removedCredential.flatMap { removePersistedSession($0) }
         credential = nil; conversation = nil; messages = []; reducer = ConversationEventReducer(); imageLoader = nil
+        pendingOutbox = []; outboxStates = [:]
         activeRunID = nil; agentActivity = .idle; isConnected = false; isBusy = false; connectionStatus = String(localized: "尚未连接"); errorMessage = persistenceError
         endIdempotencyKey = nil
         return persistenceError == nil
@@ -762,6 +876,7 @@ final class BatonViewModel: ObservableObject {
         speechInput.discardTranscript()
         composerText = ""
         credential = selectedCredential
+        pendingOutbox = []; outboxStates = [:]
         imageLoader = BatonImageLoader(endpoint: selectedCredential.conversationEndpoint, token: selectedCredential.accessToken) { [weak self] in
             self?.discardTerminatedActiveSession(detail: String(localized: "媒体访问凭据已失效，请重新连接。"), matching: selectedCredential)
         }
@@ -779,6 +894,7 @@ final class BatonViewModel: ObservableObject {
 
         do {
             updateSavedSessions(try KeychainStore.upsertSession(selectedCredential))
+            refreshOutboxPresentation(for: selectedCredential)
             refreshAndStream()
         } catch {
             shouldMaintainConnection = false

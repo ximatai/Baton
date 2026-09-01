@@ -322,6 +322,33 @@ struct ConversationReducerTests {
         #expect(restored.belongs(to: credential))
     }
 
+    @Test func outboxPresentationRestoresAsQueuedAndKeepsExplicitFailureState() {
+        let credential = SessionCredential(accessToken: "test-token", deviceID: "ios_1", sessionID: "session_1", service: ServiceDescriptor(id: "service", name: "Service", iconURL: nil), conversation: ConversationDescriptor(id: "conv_1", title: "Test", agentName: nil), conversationEndpoint: URL(string: "https://example.test/v1/baton/conversations/conv_1")!)
+        let pending = PendingOutboxMessage(clientMessageID: UUID(uuidString: "11111111-2222-3333-4444-555555555555")!, text: "send this once", credential: credential)
+
+        #expect(OutboxPresentation.items(from: [pending], states: [:]).first?.state == .queued)
+        #expect(OutboxPresentation.items(from: [pending], states: [pending.clientMessageID: .needsUserAction]).first?.state == .needsUserAction)
+        #expect(OutboxPresentation.stateAfterFailure(attemptsRemaining: 3, maintainsConnection: true) == .retrying)
+        #expect(OutboxPresentation.stateAfterFailure(attemptsRemaining: 1, maintainsConnection: true) == .needsUserAction)
+        #expect(OutboxPresentation.stateAfterFailure(attemptsRemaining: 3, maintainsConnection: false) == .needsUserAction)
+        #expect(OutboxPresentation.contains(pending, in: [pending], for: credential))
+
+        let replacementCredential = SessionCredential(accessToken: "test-token", deviceID: "ios_1", sessionID: "session_2", service: credential.service, conversation: credential.conversation, conversationEndpoint: credential.conversationEndpoint)
+        #expect(!OutboxPresentation.contains(pending, in: [pending], for: replacementCredential))
+
+        let replacementPending = PendingOutboxMessage(clientMessageID: UUID(uuidString: pending.clientMessageID)!, text: pending.text, credential: replacementCredential)
+        var deliveryRegistry = OutboxDeliveryRegistry()
+        let firstClaim = deliveryRegistry.claim(pending)
+        let duplicateClaim = deliveryRegistry.claim(pending)
+        let replacementClaim = deliveryRegistry.claim(replacementPending)
+        #expect(firstClaim)
+        #expect(!duplicateClaim)
+        #expect(replacementClaim)
+        deliveryRegistry.release(pending)
+        let claimAfterRelease = deliveryRegistry.claim(pending)
+        #expect(claimAfterRelease)
+    }
+
     @Test func credentialsRejectSnapshotsForAnotherConversation() {
         let credential = SessionCredential(accessToken: "test-token", deviceID: "ios_1", sessionID: "session_1", service: ServiceDescriptor(id: "service", name: "Service", iconURL: nil), conversation: ConversationDescriptor(id: "conv_1", title: "Test", agentName: nil), conversationEndpoint: URL(string: "https://example.test/v1/baton/conversations/conv_1")!)
 
