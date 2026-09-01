@@ -2,7 +2,7 @@
 
 > **受众：Baton 仓库维护者与本地联调者。** 这是开发 fixture 的使用说明，不是部署手册，也不是 Baton Companion Profile 的生产实现规范。产品定位见根目录 `README.md`；生产接入请读 `../BATON_SPEC.md` 与 `../JAVA_INTEGRATION.md`。
 
-Dependency-free development fixture for the V1 Companion Profile. It stores
+Dependency-free development fixture for the V1.1 Companion Profile. It stores
 one conversation in memory and generates deterministic streaming replies by
 default. An explicit command-line option can use any OpenAI-compatible chat
 endpoint instead; its API key is read only at runtime from an environment
@@ -26,7 +26,7 @@ chat client for that same server-owned conversation. Any Web or iOS message is
 therefore reflected in both clients through the same event stream.
 
 The browser chat calls `/v1/baton/mock/web/*`, an intentionally unauthenticated
-fixture convenience. It is not part of Baton/1.0 and must not be copied into a
+fixture convenience. It is not part of Baton/1.1 and must not be copied into a
 production integration: the real Java Web client uses its existing session and
 the mobile client uses its paired bearer credential.
 
@@ -163,7 +163,7 @@ default; adjustable with `--event-retention`), so an unknown or expired cursor
 returns one standard `conversation.resync` SSE/Baton envelope instead of
 replaying history from the beginning. Fetch another snapshot and continue from
 its new cursor. The authenticated `POST /v1/baton/mock/events:retention` hook
-exists solely for the smoke test; it is not part of Baton/1.0.
+exists solely for the smoke test; it is not part of Baton/1.1.
 
 Cancellation is terminal at the Baton boundary: `POST .../runs/{run_id}:cancel`
 returns `202` with `status: cancelled` and immediately emits exactly one

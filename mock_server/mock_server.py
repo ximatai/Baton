@@ -48,6 +48,8 @@ def demo_image_png():
 
 
 DEMO_IMAGE_PATH = "/v1/baton/media/mock-chart.png"
+DEMO_IMAGE_ID = "med_mock_chart_v1"
+DEMO_IMAGE_ALT = "蓝色渐变的本地 Mock 图表示例"
 DEMO_IMAGE_BYTES = demo_image_png()
 
 
@@ -75,7 +77,7 @@ class Store:
         welcome = self.add_message(
             "msg_welcome", None, "assistant", content=[
                 {"type": "text", "text": "这是本地 Baton Mock Server，可以直接开始对话。\n\n这是一个受认证图片示例："},
-                {"type": "image", "url": self.base_url + DEMO_IMAGE_PATH, "mime_type": "image/png", "width": 320, "height": 200, "alt": "蓝色渐变的本地 Mock 图表示例"},
+                {"type": "image", "media_id": DEMO_IMAGE_ID, "url": self.base_url + DEMO_IMAGE_PATH, "mime_type": "image/png", "width": 320, "height": 200, "alt": DEMO_IMAGE_ALT},
                 {"type": "text", "text": "\n\n图片与会话一样仅从同源服务读取。"},
             ]
         )
@@ -119,7 +121,7 @@ class Store:
         return {"id": latest["id"], "sequence": latest["sequence"]}
 
     def set_event_retention_for_test(self, retain_last):
-        """Fixture-only deterministic retention hook; never part of Baton/1.0."""
+        """Fixture-only deterministic retention hook; never part of Baton/1.1."""
         self.event_retention = max(1, retain_last)
         del self.events[:-self.event_retention]
 
@@ -266,7 +268,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(payload)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", "private, no-store")
         self.end_headers()
         self.wfile.write(payload)
 
@@ -284,7 +286,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", mime_type)
         self.send_header("Content-Length", str(len(value)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", "private, no-store")
         self.end_headers()
         self.wfile.write(value)
 
@@ -487,7 +489,7 @@ function textOf(message){return (message.content||[]).map(part=>part.text||'').j
 function render(){messageList.replaceChildren();if(!messages.size){const empty=document.createElement('div');empty.className='message empty';empty.textContent='开始这段共享对话。';messageList.append(empty);return}for(const message of messages.values()){const item=document.createElement('div');item.className='message '+(message.role==='user'?'user':'assistant');item.textContent=textOf(message)||(message.status==='streaming'?'正在思考…':'');messageList.append(item)}messageList.scrollTop=messageList.scrollHeight;}
 async function loadConversation(){const response=await fetch('/v1/baton/mock/web/conversation');if(!response.ok)throw new Error('snapshot');const snapshot=await response.json();for(const message of snapshot.messages.slice().reverse())put(message);$('chat-status').textContent='已连接 · Local Baton Mock';}
 function closeWebConversation(){if(conversationEnded)return;conversationEnded=true;if(stream)stream.close();messages.clear();render();$('chat-status').textContent='对话已结束。生成新二维码可开始新会话。';$('text').disabled=true;$('end').disabled=true;}
-function subscribe(){stream=new EventSource('/v1/baton/mock/web/events');stream.onopen=()=>{if(!conversationEnded)$('chat-status').textContent='已连接 · 实时同步中';};stream.onerror=()=>{if(!conversationEnded)$('chat-status').textContent='连接中断，正在重试…';};stream.addEventListener('message.created',event=>put(JSON.parse(event.data).data));stream.addEventListener('message.delta',event=>{const data=JSON.parse(event.data).data;update(data.message_id,message=>{message.content=message.content||[{type:'text',text:''}];message.content[0].text=(message.content[0].text||'')+data.delta;message.status='streaming';});});stream.addEventListener('message.completed',event=>{const data=JSON.parse(event.data).data;update(data.message_id,message=>{message.status=data.status||'completed';});});stream.addEventListener('message.failed',event=>{const data=JSON.parse(event.data).data;update(data.message_id,message=>{message.status='failed';message.content=[{type:'text',text:data.message||'回复失败，请重试。'}];});});stream.addEventListener('conversation.closed',closeWebConversation);}
+function subscribe(){stream=new EventSource('/v1/baton/mock/web/events');stream.onopen=()=>{if(!conversationEnded)$('chat-status').textContent='已连接 · 实时同步中';};stream.onerror=()=>{if(!conversationEnded)$('chat-status').textContent='连接中断，正在重试…';};stream.addEventListener('message.created',event=>put(JSON.parse(event.data).data));stream.addEventListener('message.delta',event=>{const data=JSON.parse(event.data).data;update(data.message_id,message=>{message.content=message.content||[{type:'text',text:''}];message.content[0].text=(message.content[0].text||'')+data.delta;message.status='streaming';});});stream.addEventListener('message.completed',event=>{const data=JSON.parse(event.data).data;update(data.message_id,message=>{message.status=data.status||'completed';});});stream.addEventListener('message.content.appended',event=>{const data=JSON.parse(event.data).data;update(data.message_id,message=>{message.content=(message.content||[]).concat(data.content||[]);});});stream.addEventListener('message.failed',event=>{const data=JSON.parse(event.data).data;update(data.message_id,message=>{message.status='failed';message.content=[{type:'text',text:data.message||'回复失败，请重试。'}];});});stream.addEventListener('conversation.closed',closeWebConversation);}
 function webMessageID(){if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.floor(Math.random()*16),v=c==='x'?r:(r&3)|8;return v.toString(16)});}
 $('composer').onsubmit=async event=>{event.preventDefault();const input=$('text'),text=input.value.trim();if(!text)return;input.disabled=true;try{const response=await fetch('/v1/baton/mock/web/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_message_id:webMessageID(),content:[{type:'text',text}]})});if(!response.ok)throw new Error('send');input.value='';}catch{$('chat-status').textContent='发送失败，请重试。';}finally{input.disabled=false;input.focus();}};
 $('end').onclick=async()=>{if(!confirm('结束当前对话？手机端也将自动退出。'))return;const response=await fetch('/v1/baton/mock/web/conversation:end',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(response.ok)closeWebConversation();else $('chat-status').textContent='结束失败，请重试。';};
@@ -670,6 +672,11 @@ create();
             message = next(item for item in STORE.messages if item["id"] == message_id)
             message["status"] = "completed"
             STORE.event("message.completed", {"message_id": message_id, "status": "completed"})
+            appended = [{"type": "image", "media_id": DEMO_IMAGE_ID,
+                         "url": STORE.base_url + DEMO_IMAGE_PATH, "mime_type": "image/png",
+                         "width": 320, "height": 200, "alt": DEMO_IMAGE_ALT}]
+            message["content"].extend(copy.deepcopy(appended))
+            STORE.event("message.content.appended", {"message_id": message_id, "content": appended})
             STORE.event("run.completed", {"run_id": run_id, "status": "completed"})
         fixture_log("agent.reply.completed")
 
@@ -686,7 +693,7 @@ create();
             with STORE.lock:
                 pairing = self.active_pairing(pairing_id)
                 if not pairing: return
-            return self.send_json({"protocol": "baton/1.0", "pairing_id": pairing_id,
+            return self.send_json({"protocol": "baton/1.1", "pairing_id": pairing_id,
                 "expires_at": datetime.fromtimestamp(pairing["expires_at"], timezone.utc).isoformat().replace("+00:00", "Z"),
                 "service": {"id": "local-mock", "name": "Local Baton Mock"},
                 "conversation": {"id": pairing["conversation_id"], "title": "Local test conversation", "agent_name": "Mock Agent"},
@@ -694,7 +701,7 @@ create();
                 "endpoints": {"join": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/requests",
                               "approval": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/approval",
                               "conversation": f"{STORE.base_url}/v1/baton/conversations/{STORE.conversation_id}"},
-                "capabilities": {"text": True, "markdown": True, "streaming": True, "image": True}})
+                "capabilities": {"text": True, "markdown": True, "streaming": True, "image": True, "content_append": True}})
         if path.startswith(pairing_prefix) and path.endswith("/approval"):
             return self.approval_page(path[len(pairing_prefix):-len("/approval")].strip("/"))
         if path.startswith(pairing_prefix) and path.endswith("/qr"):

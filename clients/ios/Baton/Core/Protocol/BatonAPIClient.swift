@@ -52,6 +52,22 @@ struct BatonAPIClient: Sendable {
         delegateQueue: nil
     )
 
+    /// Media is deliberately isolated from the ordinary API session. Even
+    /// when a server permits BatonImageLoader's bounded in-memory cache,
+    /// URLSession/URLCache must never retain authenticated image bytes.
+    static func mediaSessionConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return configuration
+    }
+
+    private static let mediaSession = URLSession(
+        configuration: mediaSessionConfiguration(),
+        delegate: BatonRedirectDelegate(),
+        delegateQueue: nil
+    )
+
     /// Test callers may inject a URLSession. Production requests always use a
     /// session that refuses redirects, so credentials never follow a 3xx hop.
     init(session: URLSession? = nil) { self.session = session ?? Self.protectedSession }
@@ -67,7 +83,7 @@ struct BatonAPIClient: Sendable {
     func discover(pairingURL: URL) async throws -> PairingDocument {
         try validateURL(pairingURL)
         let document: PairingDocument = try await get(url: pairingURL)
-        guard document.protocolVersion == "baton/1.0" else { throw CompanionAPIError.invalidResponse }
+        guard document.protocolVersion == "baton/1.1" else { throw CompanionAPIError.invalidResponse }
         try validateSameOrigin(pairingURL, document.endpoints.join)
         try validateSameOrigin(pairingURL, document.endpoints.approval)
         try validateSameOrigin(pairingURL, document.endpoints.conversation)
@@ -114,13 +130,14 @@ struct BatonAPIClient: Sendable {
     /// Downloads a server-provided image through the same authenticated,
     /// same-origin boundary as the Conversation itself. Image bytes are never
     /// persisted with credentials or logged.
-    func imageData(for image: MessageImage, endpoint: URL, token: String) async throws -> Data {
+    func imageData(for image: MessageImage, endpoint: URL, token: String) async throws -> BatonImageResponse {
         guard image.isPlausible, image.url.user == nil, image.url.password == nil else { throw CompanionAPIError.invalidImage }
         try validateSameOrigin(endpoint, image.url)
         var request = URLRequest(url: image.url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(image.mimeType, forHTTPHeaderField: "Accept")
-        let (bytes, response) = try await session.bytes(for: request)
+        let (bytes, response) = try await Self.mediaSession.bytes(for: request)
         guard let http = response as? HTTPURLResponse else { throw CompanionAPIError.invalidResponse }
         let isSuccess = (200...299).contains(http.statusCode)
         let byteLimit = isSuccess ? BatonImageLimits.maximumBytes : 32_768
@@ -142,7 +159,12 @@ struct BatonAPIClient: Sendable {
               responseMIMEType == image.mimeType.lowercased() else {
             throw CompanionAPIError.invalidImage
         }
-        return data
+        return BatonImageResponse(
+            data: data,
+            privateCacheLifetime: BatonImageCachePolicy.privateCacheLifetime(
+                from: http.value(forHTTPHeaderField: "Cache-Control")
+            )
+        )
     }
 
     func cancel(endpoint: URL, token: String, runID: String) async throws {
@@ -265,13 +287,48 @@ enum BatonImageLimits {
     static let cacheTotalCostLimit = 80 * 1_024 * 1_024
 }
 
+/// A sensitive rendition is non-cacheable unless the service explicitly grants
+/// a bounded private lifetime. `no-store` is always authoritative, including
+/// for this process's in-memory cache.
+enum BatonImageCachePolicy {
+    static func privateCacheLifetime(from header: String?) -> TimeInterval? {
+        guard let header else { return nil }
+        var isPrivate = false
+        var forbidsStorage = false
+        var maxAge: TimeInterval?
+
+        for rawDirective in header.split(separator: ",") {
+            let parts = rawDirective.split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+            let name = parts[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            switch name {
+            case "private": isPrivate = true
+            case "no-store", "no-cache": forbidsStorage = true
+            case "max-age" where parts.count == 2:
+                let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                if let seconds = TimeInterval(value), seconds > 0 { maxAge = seconds }
+            default: break
+            }
+        }
+        guard isPrivate, !forbidsStorage, let maxAge else { return nil }
+        return maxAge
+    }
+}
+
+struct BatonImageResponse {
+    let data: Data
+    let privateCacheLifetime: TimeInterval?
+}
+
 @MainActor
 final class BatonImageLoader: ObservableObject {
     private let endpoint: URL
     private let token: String
     private let api: BatonAPIClient
     private let onTerminalFailure: @MainActor () -> Void
-    private let cache = NSCache<NSURL, UIImage>()
+    // The media rendition identity survives URL rotation and is the only
+    // stable cache key permitted by the Companion Profile.
+    private let cache = NSCache<NSString, CachedImage>()
 
     init(endpoint: URL, token: String, onTerminalFailure: @escaping @MainActor () -> Void = {}) {
         self.endpoint = endpoint
@@ -292,16 +349,32 @@ final class BatonImageLoader: ObservableObject {
     }
 
     func image(for content: MessageImage) async throws -> UIImage {
-        if let cached = cache.object(forKey: content.url as NSURL) { return cached }
+        let key = content.mediaID as NSString
+        if let cached = cache.object(forKey: key) {
+            if cached.expiry > Date() { return cached.image }
+            cache.removeObject(forKey: key)
+        }
         do {
-            let data = try await api.imageData(for: content, endpoint: endpoint, token: token)
-            let image = try Self.decodeStaticImage(data, declaredMIMEType: content.mimeType)
+            let response = try await api.imageData(for: content, endpoint: endpoint, token: token)
+            let image = try Self.decodeStaticImage(response.data, declaredMIMEType: content.mimeType)
             let cost = image.cgImage.map { $0.bytesPerRow.multipliedReportingOverflow(by: $0.height) }.flatMap { $0.overflow ? nil : $0.partialValue } ?? BatonImageLimits.cacheTotalCostLimit
-            cache.setObject(image, forKey: content.url as NSURL, cost: min(cost, BatonImageLimits.cacheTotalCostLimit))
+            if let lifetime = response.privateCacheLifetime {
+                cache.setObject(CachedImage(image: image, expiry: Date().addingTimeInterval(lifetime)), forKey: key, cost: min(cost, BatonImageLimits.cacheTotalCostLimit))
+            }
             return image
         } catch {
             if (error as? CompanionAPIError)?.invalidatesSessionCredential == true { onTerminalFailure() }
             throw error
+        }
+    }
+
+    private final class CachedImage {
+        let image: UIImage
+        let expiry: Date
+
+        init(image: UIImage, expiry: Date) {
+            self.image = image
+            self.expiry = expiry
         }
     }
 
@@ -475,7 +548,7 @@ private final class SSEStreamDelegate: NSObject, URLSessionDataDelegate {
                 decoder: decoder
             )
             if !BatonEventType.isKnown(event.type) { batonDebugSSE("unknown_event") }
-            batonDebugSSE("received type=\(event.type) sequence=\(event.sequence.map(String.init) ?? "none")")
+            batonDebugSSE("received type=\(event.type) sequence=\(event.sequence)")
             continuation.yield(event)
         } catch {
             batonDebugSSE("failed error=\(type(of: error))")
@@ -506,7 +579,12 @@ enum SSEEnvelopeDecoder {
         guard let frameID, !frameID.isEmpty, let frameType, !frameType.isEmpty else {
             throw CompanionAPIError.invalidResponse
         }
-        let event = try decoder.decode(BatonEvent.self, from: data)
+        let event: BatonEvent
+        do {
+            event = try decoder.decode(BatonEvent.self, from: data)
+        } catch {
+            throw CompanionAPIError.invalidResponse
+        }
         guard event.id == frameID, event.type == frameType else {
             throw CompanionAPIError.invalidResponse
         }
@@ -514,11 +592,11 @@ enum SSEEnvelopeDecoder {
     }
 }
 
-private enum BatonEventType {
+enum BatonEventType {
     static func isKnown(_ type: String) -> Bool {
         switch type {
         case "conversation.snapshot", "conversation.resync", "conversation.closed",
-             "message.created", "message.delta", "message.completed", "message.failed",
+             "message.created", "message.delta", "message.completed", "message.failed", "message.content.appended",
              "run.started", "run.completed", "run.cancelled":
             true
         default:

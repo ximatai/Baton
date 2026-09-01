@@ -15,12 +15,19 @@ struct BatonCapabilities: Codable, Equatable {
     let markdown: Bool
     let streaming: Bool
     let image: Bool
+    let contentAppend: Bool
 
-    init(text: Bool = true, markdown: Bool = false, streaming: Bool = false, image: Bool = false) {
+    enum CodingKeys: String, CodingKey {
+        case text, markdown, streaming, image
+        case contentAppend = "content_append"
+    }
+
+    init(text: Bool = true, markdown: Bool = false, streaming: Bool = false, image: Bool = false, contentAppend: Bool = false) {
         self.text = text
         self.markdown = markdown
         self.streaming = streaming
         self.image = image
+        self.contentAppend = contentAppend
     }
 
     init(from decoder: Decoder) throws {
@@ -29,6 +36,7 @@ struct BatonCapabilities: Codable, Equatable {
         markdown = try container.decodeIfPresent(Bool.self, forKey: .markdown) ?? false
         streaming = try container.decodeIfPresent(Bool.self, forKey: .streaming) ?? false
         image = try container.decodeIfPresent(Bool.self, forKey: .image) ?? false
+        contentAppend = try container.decodeIfPresent(Bool.self, forKey: .contentAppend) ?? false
     }
 }
 
@@ -84,22 +92,26 @@ struct PairingDocument: Codable, Equatable {
     }
 }
 
+/// `mediaID` is the stable, service-owned identity of an immutable media
+/// rendition. `url` is only the Baton device's authenticated read location.
 struct MessageImage: Codable, Equatable, Identifiable {
+    let mediaID: String
     let url: URL
     let mimeType: String
     let width: Int
     let height: Int
     let alt: String
 
-    var id: URL { url }
+    var id: String { mediaID }
 
     enum CodingKeys: String, CodingKey {
+        case mediaID = "media_id"
         case url, width, height, alt
         case mimeType = "mime_type"
     }
 
     var isPlausible: Bool {
-        BatonImageFormat.isSupported(mimeType) && width > 0 && height > 0
+        !mediaID.isEmpty && BatonImageFormat.isSupported(mimeType) && width > 0 && height > 0
     }
 }
 
@@ -111,7 +123,7 @@ enum MessageContent: Codable, Equatable {
     case image(MessageImage)
     case unsupported(type: String, alt: String?)
 
-    private enum CodingKeys: String, CodingKey { case type, text, url, mimeType = "mime_type", width, height, alt }
+    private enum CodingKeys: String, CodingKey { case type, text, mediaID = "media_id", url, mimeType = "mime_type", width, height, alt }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -139,6 +151,7 @@ enum MessageContent: Codable, Equatable {
             try container.encode(text, forKey: .text)
         case let .image(image):
             try container.encode("image", forKey: .type)
+            try container.encode(image.mediaID, forKey: .mediaID)
             try container.encode(image.url, forKey: .url)
             try container.encode(image.mimeType, forKey: .mimeType)
             try container.encode(image.width, forKey: .width)
@@ -183,10 +196,44 @@ struct ConversationMessage: Codable, Identifiable, Equatable {
         content[0] = .text(text + delta)
         return true
     }
+
+    /// V1.1 only permits immutable static images to be appended once an
+    /// assistant answer is complete. No client can insert, replace, or remove.
+    mutating func appendCompletedImages(_ appended: [MessageContent]) -> Bool {
+        guard role == .assistant, status == "completed", !appended.isEmpty,
+              appended.allSatisfy({ $0.image != nil }) else { return false }
+        content.append(contentsOf: appended)
+        return true
+    }
 }
 struct EventCursor: Codable, Equatable {
     let id: String
     let sequence: Int
+
+    /// Snapshot cursors are the atomic boundary between history and SSE. They
+    /// are never optional or provisional: an empty identity or non-positive
+    /// sequence cannot safely resume a conversation.
+    init?(id: String, sequence: Int) {
+        guard !id.isEmpty, sequence > 0 else { return nil }
+        self.id = id
+        self.sequence = sequence
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, sequence }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try container.decode(String.self, forKey: .id)
+        let sequence = try container.decode(Int.self, forKey: .sequence)
+        guard let cursor = Self(id: id, sequence: sequence) else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .sequence,
+                in: container,
+                debugDescription: "Event cursor requires a non-empty id and positive sequence."
+            )
+        }
+        self = cursor
+    }
 }
 
 struct ActiveRun: Codable, Equatable {
@@ -291,7 +338,7 @@ struct PairingStatus: Codable, Equatable {
     let retryAfterSeconds: Int?
     let accessToken: String?
     let deviceID: String?
-    /// Required by Companion Profile 1.0. `nil` is accepted only for the
+    /// Required by Companion Profile 1.1. `nil` is accepted only for the
     /// temporary local fixture, which still exposes the legacy `current` URL.
     let sessionID: String?
     let conversation: ConversationDescriptor?
@@ -308,4 +355,30 @@ struct PairingStatus: Codable, Equatable {
     }
 }
 
-struct BatonEvent: Decodable { let id: String; let sequence: Int?; let type: String; let data: JSONValue }
+struct BatonEvent: Decodable {
+    let id: String
+    let sequence: Int
+    let type: String
+    let data: JSONValue
+
+    init(id: String, sequence: Int, type: String, data: JSONValue) {
+        self.id = id
+        self.sequence = sequence
+        self.type = type
+        self.data = data
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, sequence, type, data }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let id = try container.decode(String.self, forKey: .id)
+        let sequence = try container.decode(Int.self, forKey: .sequence)
+        let type = try container.decode(String.self, forKey: .type)
+        let data = try container.decode(JSONValue.self, forKey: .data)
+        guard !id.isEmpty, sequence > 0, !type.isEmpty else {
+            throw DecodingError.dataCorruptedError(forKey: .sequence, in: container, debugDescription: "Baton event requires a positive sequence and non-empty identity.")
+        }
+        self.init(id: id, sequence: sequence, type: type, data: data)
+    }
+}

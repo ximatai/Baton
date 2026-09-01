@@ -453,10 +453,6 @@ final class BatonViewModel: ObservableObject {
             await resynchronize(using: credential)
             return true
         }
-        if event.type == "conversation.closed" {
-            discardTerminatedActiveSession(detail: String(localized: "服务端已结束此对话。"), matching: credential)
-            return true
-        }
         if event.type == "message.created",
            let message = decodeMessage(event.data),
            !credential.ownsConversation(id: message.conversationID) {
@@ -467,6 +463,12 @@ final class BatonViewModel: ObservableObject {
         messages = reducer.messages
         if mustResync {
             await resynchronize(using: credential)
+            return true
+        }
+        // A terminal event still has to prove continuity. A conflicting or
+        // out-of-order close must resynchronize, never discard credentials.
+        if event.type == "conversation.closed" {
+            discardTerminatedActiveSession(detail: String(localized: "服务端已结束此对话。"), matching: credential)
             return true
         }
         switch event.type {

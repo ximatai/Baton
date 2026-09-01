@@ -6,7 +6,7 @@
 ## 边界
 
 - Baton 是服务端 Conversation 的 iOS Companion，不是浏览器镜像；服务端是唯一事实源。
-- V1 只做配对、文本/Markdown、SSE、取消/重连和本地语音转文字。
+- V1.1 只做配对、文本/Markdown、服务端受控静态图片展示、SSE、取消/重连和本地语音转文字；不做图片/相机/文件输入。
 - 协议以 `BATON_SPEC.md` 为准；Java 接入以 `JAVA_INTEGRATION.md` 为准。改 API、SSE、pairing 或凭据生命周期时同步检查这两份文档和 `mock_server/smoke_test.py`。
 
 ## 代码结构
@@ -22,6 +22,7 @@ clients/ios/Baton: App → Features → Core → Apple frameworks / URLSession /
 - `Core/Conversation` 是纯 reducer；不得依赖 SwiftUI、Keychain 或网络。
 - 凭据、proof、outbox 只能放 Keychain。
 - QR 扫描器只返回 URL；Speech service 只负责听写；View 不直接访问 Keychain/API。
+- 图片仅由 `Core/Protocol` 以同源 Bearer 请求；禁止重定向、URLSession/URLCache 持久化或磁盘缓存。只有 `BatonImageLoader` 可按 `media_id` 做受限、到期的内存缓存。
 - 当前单一 `BatonViewModel` 是 V1 协调器。不要提前引入 TCA、多模块、SwiftData 或 DI 框架。
 
 ## 安全

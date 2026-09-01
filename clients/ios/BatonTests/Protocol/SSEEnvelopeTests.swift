@@ -24,6 +24,33 @@ struct SSEEnvelopeTests {
         #expect(!SSEContentType.isEventStream(nil))
     }
 
+    @Test func recognizesV11ContentAppendEvents() {
+        #expect(BatonEventType.isKnown("message.content.appended"))
+        #expect(!BatonEventType.isKnown("message.content.replaced"))
+    }
+
+    @Test func imageMemoryCachingRequiresExplicitPrivateLifetime() {
+        #expect(BatonImageCachePolicy.privateCacheLifetime(from: "private, no-store") == nil)
+        #expect(BatonImageCachePolicy.privateCacheLifetime(from: "private, no-cache, max-age=60") == nil)
+        #expect(BatonImageCachePolicy.privateCacheLifetime(from: "public, max-age=60") == nil)
+        #expect(BatonImageCachePolicy.privateCacheLifetime(from: "private, max-age=60") == 60)
+    }
+
+    @Test func imageRequestsCannotUseSystemURLCache() {
+        let configuration = BatonAPIClient.mediaSessionConfiguration()
+        #expect(configuration.urlCache == nil)
+        #expect(configuration.requestCachePolicy == .reloadIgnoringLocalCacheData)
+    }
+
+    @Test func rejectsMissingZeroAndNegativeEventSequences() {
+        let missing = Data(#"{"id":"evt_11","type":"message.delta","data":{}}"#.utf8)
+        let zero = Data(#"{"id":"evt_11","sequence":0,"type":"message.delta","data":{}}"#.utf8)
+        let negative = Data(#"{"id":"evt_11","sequence":-1,"type":"message.delta","data":{}}"#.utf8)
+        for data in [missing, zero, negative] {
+            assertInvalidResponse { try SSEEnvelopeDecoder.decode(frameID: "evt_11", frameType: "message.delta", data: data) }
+        }
+    }
+
     private func assertInvalidResponse(_ operation: () throws -> BatonEvent) {
         do {
             _ = try operation()

@@ -1,7 +1,7 @@
-# Baton Companion Profile 1.0
+# Baton Companion Profile 1.1
 
 > **受众：计划让 Web/Agent 服务接入 Baton 的服务端、Web 与移动端实现者。**
-> 本文是 V1 的对外协议契约；产品介绍见 `README.md`，仓库内部编码约定见 `AGENTS.md`。
+> 本文是 V1.1 的对外协议契约；产品介绍见 `README.md`，仓库内部编码约定见 `AGENTS.md`。
 
 ## Product definition
 
@@ -10,7 +10,7 @@ Baton are equal clients of one server-owned conversation.  Baton is not a
 browser mirror and does not know how an agent, model, or business system is
 implemented.
 
-The V1 experience is deliberately narrow:
+The V1.1 experience is deliberately narrow:
 
 1. A web application creates a short-lived pairing session and renders its QR
    code.
@@ -36,7 +36,7 @@ reconnect/resume, and on-device speech-to-text.
 
 Explicitly deferred: image/camera/file input, **Agent action approvals** (HITL),
 tool UI, generated UI, location, Face ID confirmation, and push notification.
-Device pairing is different from an Agent approval feature: V1 supports a
+Device pairing is different from an Agent approval feature: V1.1 supports a
 server-controlled `manual` or `auto` pairing policy. The data and event shapes
 remain extensible for the deferred capabilities.
 
@@ -55,9 +55,9 @@ credentials, the conversation event log, SSE replay ids, and the Baton wire
 format. [AG-UI](https://docs.ag-ui.com/) is an optional **agent-facing** adapter
 behind that boundary; it neither replaces pairing nor becomes an iOS transport
 contract. A Java service may map its Agent runtime to AG-UI, then map the small
-V1 subset below into its normal Baton event log before serving iOS clients.
+AG-UI V1 subset below into its normal Baton event log before serving iOS clients.
 
-| AG-UI event | Baton event(s) | V1 mapping |
+| AG-UI event | Baton event(s) | AG-UI V1 mapping |
 | --- | --- | --- |
 | `MESSAGES_SNAPSHOT` | `conversation.snapshot` | Convert supported user/assistant text messages into Baton message envelopes. |
 | `RUN_STARTED` | `run.started` | Copy `runId`. |
@@ -68,13 +68,13 @@ V1 subset below into its normal Baton event log before serving iOS clients.
 | `RUN_ERROR` | `message.failed`, then `run.completed` | Attribute the error to the active message/run when known; terminal run data has `status: "failed"`. |
 
 Tool, reasoning, state, custom, non-text, and otherwise unknown AG-UI events
-are not Baton V1 features. The adapter records diagnostic metadata and safely
+are not Baton V1.1 features. The adapter records diagnostic metadata and safely
 omits them from the Baton stream. This prevents upstream AG-UI evolution from
 leaking directly into the iOS client. The reference adapter lives at
 `mock_server/agui_adapter.py`; it emits drafts only, and the Companion server
 assigns their ids/sequences and persists them like every other Baton event.
 
-V1 uses service-selected HTTP or HTTPS plus Server-Sent Events (SSE). The QR
+V1.1 uses service-selected HTTP or HTTPS plus Server-Sent Events (SSE). The QR
 URL chooses the transport; there is no separate transport negotiation. HTTPS
 is strongly recommended, but HTTP remains supported so an existing intranet or
 legacy Web system can adopt Baton without first changing its deployment. Baton
@@ -116,7 +116,7 @@ Web                Server                            Baton
 ```
 
 The browser shows the name of the requesting device and grants/denies it. This
-confirmation is intentionally retained in V1: scanning a photograph of a QR
+confirmation is intentionally retained in V1.1: scanning a photograph of a QR
 code alone cannot silently attach another phone.
 
 Before joining, Baton creates a cryptographically random `device_proof` (at
@@ -135,7 +135,7 @@ without requiring the user to rescan. The pairing becomes `consumed` after its
 first successful claim and still rejects every other device; it is not reusable
 for a second join. Tokens are stored in Keychain. Revoking a device invalidates
 its active token and streams. Refresh-token semantics are intentionally outside
-Baton V1.
+Baton V1.1.
 
 ### Pairing approval policy and state machine
 
@@ -164,7 +164,7 @@ app render a trustworthy pending-connection screen and submit a join request.
 
 ```json
 {
-  "protocol": "baton/1.0",
+  "protocol": "baton/1.1",
   "pairing_id": "ps_7KDX23",
   "expires_at": "2026-08-26T10:31:00Z",
   "service": { "id": "acme-erp", "name": "Acme ERP", "icon_url": "https://agent.example.com/icon.png" },
@@ -175,19 +175,21 @@ app render a trustworthy pending-connection screen and submit a join request.
     "approval": "https://agent.example.com/v1/baton/pairings/ps_7KDX23/approval",
     "conversation": "https://agent.example.com/v1/baton/conversations/conv_01J..."
   },
-  "capabilities": { "text": true, "markdown": true, "streaming": true, "image": true }
+  "capabilities": { "text": true, "markdown": true, "streaming": true, "image": true, "content_append": true }
 }
 ```
 
 The app must validate the endpoint origins against the QR origin (same origin
-in V1). `approval_mode` is a server declaration: absent means `manual` for
+in V1.1). `approval_mode` is a server declaration: absent means `manual` for
 backward compatibility; valid values are `manual` and `auto`. The App may use
 it only to explain the pending state—it must always wait for the proof-bound
 status/claim response before storing a credential. `capabilities` is a **server
-discovery declaration** in V1, not a negotiation exchange: `text` is required
-and must be `true`; `markdown`, `streaming`, and `image` declare optional server
+discovery declaration** in V1.1, not a negotiation exchange: `text` is required
+and must be `true`; `markdown`, `streaming`, `image`, and `content_append` declare optional server
 behavior. `image: true` means the server may emit the read-only `image` content
-item below; it does not authorize image upload or grant access to arbitrary URLs.
+item below; `content_append: true` means it may emit the persisted append event
+defined below. These are declarations, not negotiation: neither authorizes
+image upload or access to arbitrary URLs.
 A client may safely ignore an unknown key. Remote icon URLs are optional and
 should be fetched as untrusted content.
 
@@ -287,7 +289,8 @@ sequences from the closed Conversation are never reused.
 ### Atomic snapshot and SSE resumption
 
 The snapshot response is one atomic read of the conversation state and its
-event log position. It includes an `event_cursor`; the client sends
+event log position. It **must** include an `event_cursor` with a non-empty `id`
+and positive `sequence`; the client sends
 `event_cursor.id` as `Last-Event-ID` when opening the SSE connection.
 
 ```json
@@ -302,13 +305,13 @@ event log position. It includes an `event_cursor`; the client sends
 }
 ```
 
-V1 has no client history-pagination API. `messages` is the complete initial
+V1.1 has no client history-pagination API. `messages` is the complete initial
 history window, ordered oldest to newest, with a hard maximum of the newest
 200 messages and 1 MiB of UTF-8 serialized message content (whichever limit
 is reached first). If older history does not fit, the server returns the newest
 whole-message window and `history_truncated: true`; it never returns a partial
 message and it does not expose `next_cursor`. Old history remains a concern of
-the host Web product, not Baton V1. `active_runs` is optional and defaults to
+the host Web product, not Baton V1.1. `active_runs` is optional and defaults to
 an empty array for clients that predate it. When present it is atomically read
 with the history and cursor, and lists only non-terminal runs as
 `{run_id, status, message_id?}`. Its `run_id` is the value the client must
@@ -342,16 +345,21 @@ requires it. Persisted envelopes are UTF-8 JSON sent with standard `id:`,
 envelope `type`. Comment heartbeats are allowed and carry no Baton envelope.
 HTTP error responses are JSON, never a partial SSE event.
 
-The server emits each retained envelope once in strictly increasing `sequence`
-order for a subscription/replay and never intentionally skips a retained
-sequence. A client persists the last accepted `{id, sequence}`. It may ignore
-an exact duplicate of an already accepted envelope, but a changed id for an
-old sequence, a non-increasing new sequence, or a gap (`sequence > previous +
-1`) is a continuity failure: it must stop applying events and fetch a fresh
-snapshot. The server uses `conversation.resync` for an unknown/expired cursor;
+Every Baton envelope (including `conversation.resync`) must carry a required,
+positive integer `sequence`. The server emits each retained envelope once in
+strictly increasing `sequence` order for a subscription/replay and never
+intentionally skips a retained sequence. A client persists the last accepted
+`{id, sequence}`. It may ignore only a replay with the same previously
+accepted `id` *and* `sequence` (including a replay of the snapshot cursor).
+An already seen id paired with a different sequence, an old or equal sequence
+paired with a different id, or a gap (`sequence > previous + 1`) is a
+continuity failure: it must stop applying events and fetch a fresh snapshot
+without mutating its local timeline or cursor. A snapshot without a non-empty
+cursor id and positive sequence is invalid; clients must not establish a cursor
+from an SSE event. The server uses `conversation.resync` for an unknown/expired cursor;
 clients use the same snapshot recovery path for transport or sequence failures.
 
-Stable V1 HTTP/error semantics are: `401 invalid_token` or `session_revoked`
+Stable V1.1 HTTP/error semantics are: `401 invalid_token` or `session_revoked`
 for missing, invalid, or revoked credentials; `403 conversation_close_forbidden`
 for a valid credential lacking close permission; `404 conversation_not_found`
 for an unknown id; and `410 conversation_closed` only when a request was
@@ -374,13 +382,14 @@ pairing. Other errors are recoverable only according to their explicit code.
 }
 ```
 
-`content` is an ordered array. V1 sends only `text`, but renders both `text`
-and a read-only `image` item in their given order. Markdown is interpreted only
+`content` is an ordered array. V1.1 renders both `text` and a read-only `image`
+item in their given order. Markdown is interpreted only
 for `text` items; HTML-looking text remains plain text.
 
 ```json
 {
   "type": "image",
+  "media_id": "med_01J...",
   "url": "https://agent.example.com/v1/baton/media/img_01J...",
   "mime_type": "image/png",
   "width": 1600,
@@ -389,10 +398,14 @@ for `text` items; HTML-looking text remains plain text.
 }
 ```
 
-`url` is an absolute HTTP(S) URL on the exact same origin as the Conversation
-endpoint. It carries no credential. Baton fetches it with the Conversation
+`media_id` is a non-empty opaque identifier, unique within the service, for one
+immutable media rendition. It is stable across snapshots, SSE replay, and
+clients; the service must never reuse it for different bytes or metadata. It
+grants no access. `url` is the Baton device's standard read address, not a
+universal media identity: it is an absolute HTTP(S) URL on the exact same origin
+as the Conversation endpoint and carries no credential. Baton fetches it with the Conversation
 Bearer token, follows no redirects, and rejects a cross-origin, malformed, or
-redirected result. V1 supports only one static JPEG, PNG, or WebP image per
+redirected result. V1.1 supports only one static JPEG, PNG, or WebP image per
 item (`image/jpeg`, `image/png`, `image/webp`); the response `Content-Type`
 must exactly match `mime_type`. Servers must limit each response to 12 MiB and
 25 million decoded pixels or less; clients enforce the same limits and reject
@@ -401,9 +414,29 @@ Keychain, logs, or a client-created message. Unknown or malformed content items
 are shown as unsupported content without treating their fields as executable or
 markup.
 
+Web, desktop, and other authenticated clients **must not** copy, expose, or
+reuse a Baton device Bearer token. They resolve the same `media_id` using their
+own logged-in service session through a service-specific bridge or resolver.
+Baton deliberately does not define that endpoint or its authentication policy;
+the event log remains client-neutral and must not contain a Web-session URL.
+
+Media responses are sensitive by default and must send `Cache-Control: private,
+no-store`; clients must not retain either bytes or decoded images in memory or
+on disk after use. A service that explicitly permits **bounded private memory
+caching** must send `Cache-Control: private, max-age=<positive-seconds>` without
+`no-store` or `no-cache`; iOS may cache that rendition by `media_id` only until
+that lifetime expires, subject to its memory limit. iOS never delegates media
+bytes to URLSession/URLCache or disk caching: this bounded `media_id` cache is
+the only permitted Baton media cache. Any broader private caching policy must
+define ETag, lifetime, and post-revocation behavior. `401
+invalid_token` invalidates a Baton device session; `404` or `410` for an
+individual media URL means only that attachment is unavailable and must not end
+the Conversation.
+
 `message.delta` is valid only for a `streaming` assistant message whose
 `content` contains exactly one trailing `text` item. A streaming message cannot
-contain an `image`; servers add images only in a completed `message.created`.
+contain an `image`; servers add images only in a completed `message.created` or
+the append event below.
 
 ### Required event envelope
 
@@ -411,7 +444,7 @@ Persisted SSE event ids are strictly increasing per conversation and retained
 for a minimum of 24 hours. Every persisted envelope is emitted using standard
 SSE framing: `id:`, `event:` (equal to the envelope's `type`), and JSON
 `data:`. The per-connection `conversation.resync` control envelope above is the
-only V1 exception to persistence; it still has the complete Baton envelope
+only V1.1 exception to persistence; it still has the complete Baton envelope
 shape and standard SSE framing.
 
 ```json
@@ -424,11 +457,19 @@ shape and standard SSE framing.
 }
 ```
 
-V1 event types:
+V1.1 event types:
 
 - `conversation.snapshot` — optional initial snapshot.
 - `message.created` — immutable server-created message.
 - `message.delta` — appended text for a streaming assistant message.
+- `message.content.appended` — V1.1 server-only immutable append to a completed
+  assistant message. `data` contains a `message_id` and a non-empty `content`
+  array. Every item must be a complete valid `image` item; clients append those
+  items in order at the end. The event is persisted and uses the normal event
+  id/sequence replay and duplicate rules. A missing target, non-assistant or
+  non-completed target, empty/malformed content, or any non-image item requires
+  the client to fetch a fresh atomic snapshot. There is no replace, insertion,
+  deletion, client-initiated append, upload, file, or video operation.
 - `message.completed` — finalizes a message.
 - `message.failed` — marks a message/run failed with a user-safe error.
 - `run.started`, `run.completed`, `run.cancelled` — controls the stop button.
@@ -447,14 +488,14 @@ and multimodal content.
 
 ## Capabilities
 
-The discovery document's `capabilities` object is the only V1 capability
+The discovery document's `capabilities` object is the only V1.1 capability
 surface. It declares what this server accepts or emits for this Conversation;
 it is not a request for device capabilities and it does not grant permission.
-`text: true` is mandatory. `markdown`, `streaming`, and `image` may be declared
+`text: true` is mandatory. `markdown`, `streaming`, `image`, and `content_append` may be declared
 when implemented. `image` covers only server-to-client static-image display;
 it is neither an upload capability nor a device permission. The iOS app is
 voice-capable by local product design, but it does not advertise that fact on
-the wire in V1.
+the wire in V1.1.
 
 Bidirectional capability negotiation, per-device capabilities, and future keys
 such as `camera`, `file`, `approval`, `location`, and `notification` are
@@ -467,6 +508,8 @@ semantics rather than treating unknown keys as negotiated support.
 - Both clients receive each other’s messages without a direct client-to-client
   channel.
 - An interrupted stream resumes by event id or correctly refetches a snapshot.
+- Image `media_id` remains stable between snapshot and replayed append events;
+  an appended image remains part of the target message in every later snapshot.
 - Repeating a send request cannot create a duplicate user message.
 - Revoking the mobile device immediately prevents future access.
-- No microphone audio is uploaded by Baton for V1 transcription.
+- No microphone audio is uploaded by Baton for V1.1 transcription.

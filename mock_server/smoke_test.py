@@ -66,6 +66,7 @@ def read_sse_until(token, last_event_id, predicate, maximum=20):
                 # The HTTP event field and the Baton envelope deliberately say
                 # the same thing; this catches nonstandard SSE framing.
                 assert fields["id"] == envelope["id"] and fields["event"] == envelope["type"], fields
+                assert isinstance(envelope.get("sequence"), int) and envelope["sequence"] > 0, envelope
                 events.append(envelope)
                 fields = {}
                 if predicate(events): return events
@@ -84,7 +85,8 @@ pair = create_pairing()
 pairing_id = pair["pairing_id"]
 status, discovery = request("/.well-known/baton/pair/" + pairing_id)
 assert status == 200 and discovery["conversation"]["id"].startswith("conv_") and "join" in discovery["endpoints"]
-assert discovery["capabilities"] == {"text": True, "markdown": True, "streaming": True, "image": True}
+assert discovery["protocol"] == "baton/1.1"
+assert discovery["capabilities"] == {"text": True, "markdown": True, "streaming": True, "image": True, "content_append": True}
 CONVERSATION_ID = discovery["conversation"]["id"]
 status, denied = request(f"/v1/baton/conversations/{CONVERSATION_ID}")
 assert status == 401 and denied["error"]["code"] == "invalid_token"
@@ -138,13 +140,17 @@ status, snapshot = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=t
 assert status == 200 and snapshot["messages"] and snapshot["event_cursor"]["id"]
 welcome_image = next(part for message in snapshot["messages"] for part in message["content"] if part["type"] == "image")
 assert welcome_image["mime_type"] == "image/png" and welcome_image["width"] == 320 and welcome_image["height"] == 200
+assert welcome_image["media_id"] == "med_mock_chart_v1"
 assert welcome_image["alt"] == "蓝色渐变的本地 Mock 图表示例"
 image_url, origin = urlparse(welcome_image["url"]), urlparse(BASE)
 assert (image_url.scheme, image_url.netloc) == (origin.scheme, origin.netloc)
+status, denied_image = request(image_url.path)
+assert status == 401 and denied_image["error"]["code"] == "invalid_token"
 image_request = urllib.request.Request(welcome_image["url"], headers={"Authorization": "Bearer " + token, "Accept": "image/png"})
 with urllib.request.urlopen(image_request, timeout=3) as image_response:
     image_bytes = image_response.read()
     assert image_response.status == 200 and image_response.headers.get_content_type() == "image/png"
+    assert image_response.headers.get("Cache-Control") == "private, no-store"
 assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n") and len(image_bytes) < 12 * 1024 * 1024
 client_id = str(uuid.uuid4())
 payload = {"client_message_id": client_id, "content": [{"type": "text", "text": "hello"}]}
@@ -167,6 +173,28 @@ time.sleep(.5)  # Let the small deterministic reply above finish before the next
 status, resume_snapshot = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=token)
 assert status == 200
 cursor = resume_snapshot["event_cursor"]
+
+# V1.1 keeps a server-created evidence image attached to the same completed
+# assistant message. It is persisted, replayable, and uses the same immutable
+# media identity as the image found in a later atomic snapshot.
+append_payload = {"client_message_id": str(uuid.uuid4()), "content": [{"type": "text", "text": "append evidence"}]}
+status, _ = request(f"/v1/baton/conversations/{CONVERSATION_ID}/messages", "POST", append_payload, token)
+assert status == 201
+appended_events = read_sse_until(token, cursor["id"], lambda events: any(event["type"] == "message.content.appended" for event in events))
+append_event = next(event for event in appended_events if event["type"] == "message.content.appended")
+assert append_event["data"]["content"] and append_event["data"]["content"][0]["media_id"] == "med_mock_chart_v1"
+assert append_event["data"]["content"][0]["alt"] == welcome_image["alt"]
+replayed_append = read_sse_until(token, cursor["id"], lambda events: any(event["id"] == append_event["id"] for event in events))
+assert sum(event["id"] == append_event["id"] for event in replayed_append) == 1
+status, appended_snapshot = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=token)
+assert status == 200
+appended_message = next(message for message in appended_snapshot["messages"] if message["id"] == append_event["data"]["message_id"])
+assert appended_message["status"] == "completed"
+assert appended_message["content"][-1]["media_id"] == append_event["data"]["content"][0]["media_id"]
+assert appended_message["content"][-1] == append_event["data"]["content"][0]
+
+# Continue with a separate run for cancellation semantics.
+cursor = appended_snapshot["event_cursor"]
 resume_payload = {"client_message_id": str(uuid.uuid4()), "content": [{"type": "text", "text": "resume cursor"}]}
 status, _ = request(f"/v1/baton/conversations/{CONVERSATION_ID}/messages", "POST", resume_payload, token)
 assert status == 201
@@ -324,4 +352,4 @@ next_pair = create_pairing()
 status, next_discovery = request("/.well-known/baton/pair/" + next_pair["pairing_id"])
 assert status == 200 and next_discovery["conversation"]["id"] != CONVERSATION_ID
 
-print("smoke test passed: pairing safety, source-of-truth streaming snapshots, terminal cancel/failure, invalid-cursor resync, exact session revocation, and shared conversation end")
+print("smoke test passed: V1.1 media identity/append replay, pairing safety, source-of-truth streaming snapshots, terminal cancel/failure, invalid-cursor resync, exact session revocation, and shared conversation end")

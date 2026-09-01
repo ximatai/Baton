@@ -40,10 +40,11 @@ struct PairingTests {
     }
 
     @Test func pairingApprovalModeDefaultsToManualAndAcceptsServerAutoPolicy() throws {
-        let base = #"{"protocol":"baton/1.0","pairing_id":"ps_1","expires_at":"2026-08-30T00:00:00Z","service":{"id":"service","name":"Service"},"conversation":{"id":"conv_1","title":"Conversation"},"endpoints":{"join":"https://service.example/join","approval":"https://service.example/approval","conversation":"https://service.example/conversation"},"capabilities":{"text":true,"image":true}}"#
+        let base = #"{"protocol":"baton/1.1","pairing_id":"ps_1","expires_at":"2026-08-30T00:00:00Z","service":{"id":"service","name":"Service"},"conversation":{"id":"conv_1","title":"Conversation"},"endpoints":{"join":"https://service.example/join","approval":"https://service.example/approval","conversation":"https://service.example/conversation"},"capabilities":{"text":true,"image":true,"content_append":true}}"#
         let manual = try JSONDecoder().decode(PairingDocument.self, from: Data(base.utf8))
         #expect(manual.approvalMode == .manual)
         #expect(manual.capabilities.image)
+        #expect(manual.capabilities.contentAppend)
         let autoJSON = String(base.dropLast()) + #","approval_mode":"auto"}"#
         let auto = try JSONDecoder().decode(PairingDocument.self, from: Data(autoJSON.utf8))
         #expect(auto.approvalMode == .auto)

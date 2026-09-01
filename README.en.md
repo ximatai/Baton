@@ -91,14 +91,15 @@ without giving model keys to the app.
   approval available
 - Saved multiple conversations, switching between them, and per-conversation
   availability checks
-- Text chat, Markdown, and streaming replies in one shared conversation
+- Text chat, Markdown, streaming replies, and server-controlled static-image display in one shared conversation
 - Stop generation, reconnect after interruption, and end a shared conversation
 - iOS camera scanning; a Simulator Debug build can use the local demo service
 - On-device iOS Speech-to-Text: edit the transcript, then send it as normal text
 
-Images and files, Tool UI, Agent-action approval, push notifications, location,
-and generative UI are intentionally out of scope for now. Baton first focuses on
-making a shared conversation reliable across devices.
+Image upload, camera/files, Tool UI, Agent-action approval, push notifications,
+location, and generative UI are intentionally out of scope for now. Baton only
+displays server-controlled static images and first focuses on making a shared
+conversation reliable across devices.
 
 ## Add Baton to an existing system
 

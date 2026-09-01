@@ -1,8 +1,8 @@
-# Java Web 接入指南（Baton Companion Profile 1.0）
+# Java Web 接入指南（Baton Companion Profile 1.1）
 
 > **受众：已有 Java Web/Agent 服务的接入维护者。** 这是一份实现指南；完整 wire contract 以 [BATON_SPEC.md](BATON_SPEC.md) 为准，产品介绍见 [README.md](README.md)。
 
-Baton 的本地 Python 服务是协议测试靶场，不是生产后端；Java 服务继续拥有现有登录态、Conversation、Agent 运行时和业务权限。本文只描述当前 [BATON_SPEC.md](BATON_SPEC.md) 已定义的 V1 行为，不要求引入某个 Java 框架、SDK 或 Agent 框架。
+Baton 的本地 Python 服务是协议测试靶场，不是生产后端；Java 服务继续拥有现有登录态、Conversation、Agent 运行时和业务权限。本文只描述当前 [BATON_SPEC.md](BATON_SPEC.md) 已定义的 V1.1 行为，不要求引入某个 Java 框架、SDK 或 Agent 框架。
 
 ## 边界与职责
 
@@ -15,13 +15,13 @@ Baton 的本地 Python 服务是协议测试靶场，不是生产后端；Java �
 
 服务器是 Conversation 的唯一事实源。Web 与 Baton 是同一会话的平级客户端，客户端之间不直接传递消息。
 
-## V1 capabilities
+## V1.1 capabilities
 
 Discovery document 内的 `capabilities` 只是服务端对当前 Conversation
-的能力声明，不是设备协商、也不授予权限。`text: true` 为 V1 必填；
-`markdown`、`streaming`、`image` 仅在服务真正支持时声明。`image` 只表示
+的能力声明，不是设备协商、也不授予权限。`text: true` 为 V1.1 必填；
+`markdown`、`streaming`、`image`、`content_append` 仅在服务真正支持时声明。`image` 只表示
 服务会下发可读取的静态图片内容项，不是上传协商或设备权限。iOS 的本地语音能力
-不需要也不应在 V1 回传。未来若要支持 camera/file/approval 等双向能力，
+不需要也不应在 V1.1 回传。未来若要支持 camera/file/approval 等双向能力，
 必须另行定义协商、授权与降级语义，不能把未知字段视为已经协商成功。
 
 ## 配对与浏览器授权
@@ -36,7 +36,7 @@ auto:   created -- device joins -----------------> approved -- first claim --> c
 ```
 
 1. 已认证的 Web 页面调用 `POST /v1/baton/pairings`，将 pairing 绑定到当前用户、浏览器会话和选定 Conversation。生成至少 256 bit 的高熵 `pairing_id`，有效期不超过 60 秒，并返回 QR URL、approval URL、`approval_mode` 和过期时间。`approval_mode` 缺省为 `manual`；只有服务端在自身权限与 Conversation 策略允许时才能设为 `auto`。
-2. QR 只包含绝对的 HTTP 或 HTTPS discovery URL；不得放 bearer token、Conversation 历史或永久凭据。服务端自行选择 transport，V1 要求 discovery 中的 endpoint 与 QR origin 完全同源（scheme、host、port）。HTTP 已被协议支持以兼容既有内网/遗留系统，但 Baton 会持续标记为未加密；服务方必须自行评估该网络不能提供传输保密性与完整性的风险，客户端不会静默升级或降级。
+2. QR 只包含绝对的 HTTP 或 HTTPS discovery URL；不得放 bearer token、Conversation 历史或永久凭据。服务端自行选择 transport，V1.1 要求 discovery 中的 endpoint 与 QR origin 完全同源（scheme、host、port）。HTTP 已被协议支持以兼容既有内网/遗留系统，但 Baton 会持续标记为未加密；服务方必须自行评估该网络不能提供传输保密性与完整性的风险，客户端不会静默升级或降级。
 3. iOS 读取 discovery 后调用 join，提交 `device_id`、展示名和仅本地持有的 `device_proof`。服务只接受一个设备请求：`manual` 转为 `pending`，`auto` 必须在同一事务中直接转为 `approved`。
 4. `manual` 时，Java Web 在已有登录会话下展示设备名称，用户明确允许或拒绝。创建和批准均必须遵循现有 Web 的 CSRF 防护（同站 Cookie、CSRF token/header、Origin/Referer 校验等按现有应用规则实现）。`auto` 不经过这一页，但不是“无安全性”：有效期内 QR 本身成为加入该 Conversation 的短期能力，只有服务端明确认可该风险的受控场景才可启用。不能让 iOS 参数、discovery 字段或前端页面越权选择 `auto`；Mock 的无登录 HTML 表单仅用于本地测试。
 5. iOS 用 `X-Baton-Device-Proof` 轮询 status。批准后首次 claim 签发 Conversation-scoped、绑定设备的短期 Bearer token（规范建议 24 小时）；proof 绑定的重试在 pairing 仍有效时返回同一 token。拒绝或过期永不签发 token。
@@ -54,7 +54,7 @@ Java 服务应使 `manual` approval 具有服务端授权检查和一次性状�
 | 加入请求 | `POST /v1/baton/pairings/{id}/requests` | Baton；JSON 提交 `device_id`、`device_name`、`device_proof`；成功为 `202` 并返回 `request_id`、绝对同源且可由手机直接访问的 `poll_url`；manual 为 pending，auto 原子进入 approved | 字段/低熵 proof `400 invalid_device`；已有请求/非 created `409 pairing_not_available`；未知/过期同上 |
 | 状态/claim | `GET /v1/baton/pairings/{id}/requests/{requestId}` | Baton；必须带 `X-Baton-Device-Proof`；pending 返回重试间隔，approved 返回 token，rejected 返回终态 | proof 不符 `403 invalid_device_proof`；请求不存在 `404 request_not_found`；不可用 `409 pairing_not_available` |
 | 决定 pairing | `POST /v1/baton/pairings/{id}/approval` | Web；仅 manual，现有登录和 CSRF 保护下提交 `{ "decision": "approved"\|"rejected" }` | 无效决定 `400 invalid_decision`；非 pending/auto `409 pairing_not_pending`；未登录/无权由现有 Web 授权层拒绝 |
-| 快照 | `GET /v1/baton/conversations/{id}` | Baton；Bearer token；原子返回元数据、有上限的初始历史、可选 `active_runs` 和 `event_cursor`，缓存不是事实源 | 无/错 token `401 invalid_token`；未知 Conversation `404 conversation_not_found` |
+| 快照 | `GET /v1/baton/conversations/{id}` | Baton；Bearer token；原子返回元数据、有上限的初始历史、必填 `event_cursor` 与可选 `active_runs`，缓存不是事实源 | 无/错 token `401 invalid_token`；未知 Conversation `404 conversation_not_found` |
 | 发送 | `POST /v1/baton/conversations/{id}/messages` | Baton；Bearer token；文本消息必须含 UUID `client_message_id`；相同 id 重试返回原消息，不重复创建 | `401 invalid_token`、`404 conversation_not_found`、`400 invalid_message` |
 | 读取图片 | `GET image.url` | Baton；Bearer token；仅读取消息 `content[]` 中同源的静态图片 | `401 invalid_token`、`404` 或服务定义的媒体错误 |
 | 事件流 | `GET /v1/baton/conversations/{id}/events` | Baton；Bearer token 的 SSE；将 snapshot 的 `event_cursor.id` 放入 `Last-Event-ID` 恢复 | `401 invalid_token`、`404 conversation_not_found`；游标不可恢复时发送 `conversation.resync` |
@@ -66,15 +66,19 @@ Java 服务应使 `manual` approval 具有服务端授权检查和一次性状�
 
 ## 服务端图片内容
 
-服务可在按时间顺序的消息 `content[]` 中下发 `{ "type": "image", "url", "mime_type", "width", "height", "alt" }`，并在 discovery 声明 `"image": true`。`url` 必须是与 Conversation endpoint 精确同源的绝对 HTTP(S) URL，不得包含 token；Baton 会带现有 Bearer header 请求它且拒绝重定向。只支持静态 `image/jpeg`、`image/png`、`image/webp`，响应 MIME 必须与 `mime_type` 一致，单项不超过 12 MiB / 2500 万解码像素。不得把图片 bytes 写入 snapshot、SSE、日志或 `content` JSON，也不得借此增加上传、文件或外链图床接口。
+服务可在按时间顺序的消息 `content[]` 中下发 `{ "type": "image", "media_id", "url", "mime_type", "width", "height", "alt" }`，并在 discovery 声明 `"image": true`。`media_id` 必须是服务内唯一、opaque、指向不可变 media rendition 的稳定身份；`url` 只是 Baton iOS 的读取地址，必须与 Conversation endpoint 精确同源、不得包含 token。Baton 会带现有 Bearer header 请求它且拒绝重定向。只支持静态 `image/jpeg`、`image/png`、`image/webp`，响应 MIME 必须与 `mime_type` 一致，单项不超过 12 MiB / 2500 万解码像素。不得把图片 bytes 写入 snapshot、SSE、日志或 `content` JSON，也不得借此增加上传、文件或外链图床接口。默认响应 `Cache-Control: private, no-store`，Baton 不保留其 bytes 或解码图；只有明确的 `Cache-Control: private, max-age=<positive-seconds>`（且没有 `no-store`/`no-cache`）才允许 iOS 按 `media_id` 在内存上限内缓存至过期。iOS 媒体请求绝不交给 URLSession/URLCache 或磁盘缓存；这项受限、到期的 `media_id` 内存缓存是唯一允许的 Baton 图片缓存。`401 invalid_token` 使 Baton 删除会话，单个媒体的 `404/410` 只显示附件不可用。
+
+Web、桌面端不得获得或复用 Baton device Bearer。它们以现有 Cookie/SSO/网关会话通过服务自有 bridge/resolver 读取同一 `media_id`；该接口不属于 Baton 规范，且不得把任一 Web 会话专属 URL 写进 Baton snapshot 或 SSE。
+
+服务在 discovery 声明 `"content_append": true` 后，可持久化发送 `message.content.appended`：仅面向已完成 assistant message，`data` 必含 `message_id` 和非空的完整 image `content[]`，按顺序末尾追加。该 event 沿用正常 `id`/`sequence` 回放与去重；非法内容或不存在/非 completed assistant 的目标必须使客户端 resync。不得实现替换、插入、删除、客户端发起 append 或上传。
 
 Join 响应里的 `poll_url` 必须是完整的绝对 URL（含 scheme 和 host），与 discovery / join 的**服务对外 origin** 完全相同，并可由发起请求的 iPhone 直接访问；不得返回 `/v1/...` 这样的相对路径。它只可含 request id，不能含 token 或 `device_proof`，领取仍需 `X-Baton-Device-Proof`。在反向代理或 TLS 终止之后，Java 服务必须使用受信任部署配置确定 canonical external origin（包括所选的 `http` 或 `https` scheme），不能直接信任任意 `Host` 或 `X-Forwarded-*` 请求头来拼 URL。相对、跨 origin 或不可访问的 `poll_url` 是契约失败，Baton 会在 join 阶段拒绝它。
 
-V1 不提供移动端历史分页。snapshot 的 `messages` 必须以时间正序一次返回完整初始窗口：最多最新 200 条完整消息、且序列化文本总量最多 1 MiB，先达到任一边界即截断旧消息。超限返回 `history_truncated: true`，不得返回半条消息、不得返回 `next_cursor`；旧历史仍由现有 Web 产品负责。snapshot 可省略 `active_runs`，客户端按空数组处理；提供时它必须与 history/cursor 同一事务读取，形状为 `[{"run_id":"run_…","status":"running","message_id":"msg_…"}]`，其中 `message_id` 可省略，且只列非终态 run。iOS 用 `run_id` 在重连后恢复 Stop。
+V1.1 不提供移动端历史分页。snapshot 的 `messages` 必须以时间正序一次返回完整初始窗口：最多最新 200 条完整消息、且序列化文本总量最多 1 MiB，先达到任一边界即截断旧消息。超限返回 `history_truncated: true`，不得返回半条消息、不得返回 `next_cursor`；旧历史仍由现有 Web 产品负责。snapshot 可省略 `active_runs`，客户端按空数组处理；提供时它必须与 history/cursor 同一事务读取，形状为 `[{"run_id":"run_…","status":"running","message_id":"msg_…"}]`，其中 `message_id` 可省略，且只列非终态 run。iOS 用 `run_id` 在重连后恢复 Stop。
 
 SSE event id 按 Conversation 严格递增，事件至少保留 24 小时；响应固定为 `200 Content-Type: text/event-stream; charset=utf-8` 与 `Cache-Control: no-cache`，并按部署栈关闭代理缓冲。每个持久化事件都以 UTF-8 的 `id:`、与 envelope `type` 相同的 `event:`、JSON `data:` 和空行标准 framing 发送；心跳可用 SSE comment，不得伪装 Baton event。HTTP 失败必须返回 JSON，不能先写半截 SSE。不要把 AG-UI 原始事件名直接暴露给 iOS。
 
-若 `Last-Event-ID` 未知或超过 retention，**不得从头回放**：仅向该连接发送一个完整的 `conversation.resync` envelope，`data.reason` 为 `cursor_unknown_or_expired`，其 id/sequence 复用当前最新保留游标。它不写入 Conversation event log；客户端必须重新取 snapshot 并以新的 `event_cursor` 继续。服务端在每次回放/直播中按连续 `sequence` 发出所有 retained envelope，不能有意跳号。客户端保存最后已接受的 `{id, sequence}`：同一 id 的重复 envelope 可忽略；旧 sequence 对应不同 id、非递增的新 sequence，或 `sequence > previous + 1` 都视为连续性损坏，客户端停止应用流并取新 snapshot。运输断线、格式/MIME 不符与该 gap 走同一 resync 路径。
+若 `Last-Event-ID` 未知或超过 retention，**不得从头回放**：仅向该连接发送一个完整的 `conversation.resync` envelope，`data.reason` 为 `cursor_unknown_or_expired`，其 id/sequence 复用当前最新保留游标。它不写入 Conversation event log；客户端必须重新取 snapshot 并以新的 `event_cursor` 继续。每个 Baton envelope（包括非持久化的 `conversation.resync`）都必须带正整数 `sequence`。服务端在每次回放/直播中按连续 `sequence` 发出所有 retained envelope，不能有意跳号。客户端保存最后已接受的 `{id, sequence}`：**只有 id 与 sequence 都相同的 exact duplicate 才可忽略**；旧或同序但 id 不同、同一 id 却对应不同 sequence、任何其他非递增 sequence，以及 `sequence > previous + 1` 都是连续性损坏，客户端停止应用流并取新 snapshot。snapshot 的 `event_cursor` 是必填的原子边界，不能为空 id 或非正 sequence；客户端不得以首个 SSE event 建立 cursor。运输断线、格式/MIME 不符与该 gap 走同一 resync 路径。
 
 cancel 的 `202 cancellation_requested` 只代表服务已接受请求；执行器应保证流式 assistant 消息先收到 `message.completed { status: "cancelled" }`，再且仅再一次发送 `run.cancelled`。重复取消同一终态 run 可返回其现有 terminal status，但不能重复发布终态事件。
 
@@ -93,7 +97,7 @@ cancel 的 `202 cancellation_requested` 只代表服务已接受请求；执行�
 - `device_proof` 由 iOS 用系统安全随机源生成，至少 256 bit；只放请求体和 `X-Baton-Device-Proof` header，绝不放 QR、discovery、URL、HTML 或日志。
 - Java 服务将 proof 与 pairing request 绑定，比较时使用常数时间比较；持久化实现应避免明文长期保存（至少按服务现有 secret 保护策略加密或保存不可逆摘要），并限制读取权限。日志、追踪、异常内容必须脱敏。
 - 一个 pairing 只接受一个设备请求。首次成功 claim 后标记 `consumed`；同一 proof 在邀请仍有效时可以安全重试并得到相同 token，其他 proof 永远不能领取。
-- access token 只代表一个 Conversation 和一个设备，存活期短（规范建议 24 小时），只放在 Bearer header 传输；不放 query string、HTML 或事件数据。HTTPS 强烈推荐。若现有服务选择 HTTP，Baton 仍会互通但会持续标记未加密；该网络中的 token 与会话流量不具备传输保密性或完整性，服务方必须承担并限制此风险。当前协议没有规定 refresh endpoint，不要擅自把 refresh token 变成 V1 必需接口。
+- access token 只代表一个 Conversation 和一个设备，存活期短（规范建议 24 小时），只放在 Bearer header 传输；不放 query string、HTML 或事件数据。HTTPS 强烈推荐。若现有服务选择 HTTP，Baton 仍会互通但会持续标记未加密；该网络中的 token 与会话流量不具备传输保密性或完整性，服务方必须承担并限制此风险。当前协议没有规定 refresh endpoint，不要擅自把 refresh token 变成 V1.1 必需接口。
 - Keychain 由 iOS 保存 token。服务端撤销设备时应使该设备的 token/刷新凭据（若服务已有刷新机制）和活动流失效；Java 服务不应依赖客户端主动删除作为安全边界。
 
 ## Agent 与 AG-UI 事件接入
@@ -112,7 +116,7 @@ cancel 的 `202 cancellation_requested` 只代表服务已接受请求；执行�
 | `RUN_FINISHED` | `run.completed` |
 | `RUN_ERROR` | `message.failed`，随后失败状态的 `run.completed` |
 
-写入顺序必须是：Agent 事件 → adapter draft → 服务端补充序号并持久化 → SSE 发布。这样断线客户端能用 `Last-Event-ID` 回放，且不会出现“已发给在线客户端、重连后却没有”的事件。未知、tool、reasoning、state、custom 和非文本 AG-UI 事件在 V1 可记录诊断并忽略，不得强迫 iOS 理解它们。
+写入顺序必须是：Agent 事件 → adapter draft → 服务端补充序号并持久化 → SSE 发布。这样断线客户端能用 `Last-Event-ID` 回放，且不会出现“已发给在线客户端、重连后却没有”的事件。未知、tool、reasoning、state、custom 和非文本 AG-UI V1 事件可记录诊断并忽略，不得强迫 iOS 理解它们。
 
 ## Java/Servlet 实现建议
 
@@ -135,12 +139,13 @@ cancel 的 `202 cancellation_requested` 只代表服务已接受请求；执行�
 - [ ] Web 拒绝后 status 返回 rejected，永不返回 token。
 - [ ] 过期 pairing 返回 `410 pairing_expired`。
 - [ ] 快照可读且带原子 `event_cursor`；最多返回最新 200 条/1 MiB 的完整消息，超限明确 `history_truncated` 而无分页 cursor；active run 存在时给出可选 `active_runs[{run_id,status,message_id?}]`。重复相同 `client_message_id` 不创建重复用户消息（首次 `201`、重试 `200`）。
-- [ ] SSE 返回 `text/event-stream; charset=utf-8`，能收到标准 `id/event/data` 格式的 `message.created`、`run.started`、`message.delta`、`message.completed`、`run.completed`；使用 snapshot 的 `Last-Event-ID` 只恢复连续后续事件，未知/过期 cursor 只收到 `conversation.resync` 而非从头重复；客户端遇到 sequence gap 会取新 snapshot。
+- [ ] SSE 返回 `text/event-stream; charset=utf-8`，能收到标准 `id/event/data` 格式的 `message.created`、`run.started`、`message.delta`、`message.completed`、`message.content.appended`、`run.completed`；使用 snapshot 的 `Last-Event-ID` 只恢复连续后续事件，未知/过期 cursor 只收到 `conversation.resync` 而非从头重复；客户端遇到 sequence gap 会取新 snapshot。
+- [ ] `media_id` 在 snapshot、SSE replay 和后续 snapshot 中不变；append 只追加完整 image 到 completed assistant message，重复 event 不重复渲染。
 - [ ] cancel 首次返回已接受，随后按“message cancelled → run.cancelled”获得唯一终态；重复取消不重复发布事件；DELETE 撤销后未来访问被拒绝。
 - [ ] 有 `conversation:close` 权限的 Web 与 Baton 均可 End；无权固定 `403 conversation_close_forbidden`。End 仅广播一条 `conversation.closed`，使所有 token/未决 pairing 失效，丢弃任何晚到的 Agent 输出；同 `Idempotency-Key` 重试不重复结束。下一段会话使用新 Conversation ID 与新事件序列。
 - [ ] AG-UI V1 fixture 映射到上述 Baton 事件；未知 AG-UI 事件只进入诊断，不泄漏到 iOS wire format。
 - [ ] 所有 transport、proof、token、Cookie/CSRF 和日志脱敏检查通过；若选择 HTTP，已确认可信网络与 Baton 的未加密提示；LM Studio key 不出现在代码、文档、请求或 iOS 包内。
 
-## V1 暂缓
+## V1.1 暂缓
 
-不因 Java 接入提前实现图片上传、相机/文件、Agent action approval（区别于网页确认设备 pairing）、Tool UI、generated UI、location、Face ID confirmation、push notification、WebSocket、账户体系或 Java SDK。除已定义的只读静态 `image` 外，能力声明可保留未来扩展键；服务和 iOS V1 只依赖 `text`、`markdown`、`streaming`、`image` 及设备端 `on_device_speech_to_text`。
+不因 Java 接入提前实现图片上传、相机/文件、Agent action approval（区别于网页确认设备 pairing）、Tool UI、generated UI、location、Face ID confirmation、push notification、WebSocket、账户体系或 Java SDK。除已定义的只读静态 `image` 外，能力声明可保留未来扩展键；服务和 iOS V1.1 只依赖 `text`、`markdown`、`streaming`、`image`、`content_append` 及设备端 `on_device_speech_to_text`。
