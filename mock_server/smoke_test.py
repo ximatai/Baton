@@ -2,6 +2,7 @@
 """Repeatable pairing and conversation smoke test; starts no server itself."""
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -40,11 +41,31 @@ if REVIEW_DEMO_TOKEN:
     # normal, short-lived, auto-approved invitation for a single scanner.
     status, page = request(f"/review/{REVIEW_DEMO_TOKEN}", expect_json=False)
     assert status == 200 and "App Review Demo" in page
+    action_match = re.search(r'reviewAction=("[^"]+")', page)
+    assert action_match
+    review_action = json.loads(action_match.group(1))
     status, review_pair = request(f"/review/{REVIEW_DEMO_TOKEN}/pairing", "POST", {})
     assert status == 200 and review_pair["approval_mode"] == "auto"
     assert review_pair["expires_at"].endswith("Z")
     status, review_discovery = request("/.well-known/baton/pair/" + review_pair["pairing_id"])
     assert status == 200 and review_discovery["approval_mode"] == "auto"
+    assert review_discovery["service"]["name"] == "Baton Review Demo"
+    assert review_discovery["conversation"]["title"] == "Today’s task plan"
+    review_conversation_id = review_discovery["conversation"]["id"]
+    status, next_review_pair = request(f"/review/{REVIEW_DEMO_TOKEN}/pairing", "POST", {})
+    assert status == 200 and next_review_pair["pairing_id"] != review_pair["pairing_id"]
+    status, _ = request("/.well-known/baton/pair/" + review_pair["pairing_id"])
+    assert status == 410
+    status, next_review_discovery = request("/.well-known/baton/pair/" + next_review_pair["pairing_id"])
+    assert status == 200 and next_review_discovery["conversation"]["id"] == review_conversation_id
+    status, forbidden_end = request("/conversation:end", "POST", {})
+    assert status == 403 and forbidden_end["error"]["code"] == "review_action_forbidden"
+    status, ended_review = request("/conversation:end", "POST", {}, extra_headers={"X-Baton-Review-Action": review_action})
+    assert status == 200 and ended_review["status"] == "ended"
+    status, after_end_pair = request(f"/review/{REVIEW_DEMO_TOKEN}/pairing", "POST", {})
+    assert status == 200
+    status, after_end_discovery = request("/.well-known/baton/pair/" + after_end_pair["pairing_id"])
+    assert status == 200 and after_end_discovery["conversation"]["id"] != review_conversation_id
 
 
 def read_sse_until(token, last_event_id, predicate, maximum=20):

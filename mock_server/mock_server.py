@@ -67,21 +67,31 @@ class Store:
         self.conversation_id = None
         self.reset_conversation()
 
-    def reset_conversation(self):
+    def reset_conversation(self, title="Local test conversation", welcome=True, fixture_media=True, review_demo=False):
         self.conversation_epoch += 1
         # A new handoff is a new server-owned conversation, rather than a
         # recycled fixture ID with an unrelated event sequence.
         self.conversation_id = "conv_" + uuid.uuid4().hex
+        self.conversation_title = title
+        self.fixture_media_enabled = fixture_media
+        self.is_review_demo = review_demo
         self.messages, self.runs, self.events, self.next_sequence = [], {}, [], 1
         self.conversation_closed = False
-        welcome = self.add_message(
+        messages = []
+        if welcome:
+            messages.append(self.add_welcome_message())
+        self.event("conversation.snapshot", {"conversation_id": self.conversation_id, "messages": messages})
+
+    def add_welcome_message(self):
+        if not self.fixture_media_enabled:
+            return self.add_message("msg_welcome", None, "assistant", "这是本地 Baton Mock Server，可以直接开始对话。")
+        return self.add_message(
             "msg_welcome", None, "assistant", content=[
                 {"type": "text", "text": "这是本地 Baton Mock Server，可以直接开始对话。\n\n这是一个受认证图片示例："},
                 {"type": "image", "media_id": DEMO_IMAGE_ID, "url": self.base_url + DEMO_IMAGE_PATH, "mime_type": "image/png", "width": 320, "height": 200, "alt": DEMO_IMAGE_ALT},
                 {"type": "text", "text": "\n\n图片与会话一样仅从同源服务读取。"},
             ]
         )
-        self.event("conversation.snapshot", {"conversation_id": self.conversation_id, "messages": [welcome]})
 
     def close_conversation(self):
         if self.conversation_closed: return False
@@ -168,6 +178,7 @@ STORE = None
 CHAT_COMPLETER = None
 SSE_LIVE_SECONDS = 300
 REVIEW_DEMO_TOKEN = None
+REVIEW_ACTION_TOKEN = None
 REVIEW_DEMO_TTL_SECONDS = 45
 
 
@@ -188,19 +199,21 @@ class OpenAICompatibleChatCompleter:
         self.reasoning_effort = reasoning_effort
 
     def complete(self, messages):
+        latest_user = next((message for message in reversed(messages) if message["role"] == "user"), None)
+        content = ""
+        if latest_user:
+            content = "".join(part.get("text", "") for part in latest_user["content"] if part.get("type") == "text")
+        language = "Chinese" if any("\u4e00" <= character <= "\u9fff" for character in content) else "English"
         provider_messages = [{
             "role": "system",
-            "content": "You are Baton’s helpful Chinese-speaking assistant. Reply directly and concisely.",
+            "content": f"You are Baton’s helpful {language}-speaking assistant. Reply directly and concisely in {language}.",
         }]
         # This fixture deliberately sends only the latest user turn. The
         # configured LM Studio model's prompt template rejects assistant turns;
         # conversation history belongs to the real Companion/Java server, not
         # this small local test adapter.
-        latest_user = next((message for message in reversed(messages) if message["role"] == "user"), None)
-        if latest_user:
-            content = "".join(part.get("text", "") for part in latest_user["content"] if part.get("type") == "text")
-            if content:
-                provider_messages.append({"role": "user", "content": content})
+        if content:
+            provider_messages.append({"role": "user", "content": content})
         if len(provider_messages) == 1:
             raise ChatCompletionError("no user message to complete")
         payload = {"model": self.model, "messages": provider_messages, "temperature": 0.4}
@@ -321,12 +334,37 @@ class Handler(BaseHTTPRequestHandler):
         approval_mode = body.get("approval_mode", "manual")
         if approval_mode not in ("manual", "auto"):
             return self.error(400, "invalid_approval_mode", "approval_mode must be manual or auto.")
+        review_demo = body.get("review_demo", False)
+        if not isinstance(review_demo, bool):
+            return self.error(400, "invalid_review_demo", "review_demo must be a boolean.")
         with STORE.lock:
-            if STORE.conversation_closed: STORE.reset_conversation()
+            if review_demo:
+                # A fresh QR supersedes an unscanned earlier invitation, but
+                # remains attached to the active review conversation.
+                for existing in STORE.pairings.values():
+                    if existing.get("review_demo"):
+                        existing["status"] = "expired"
+                        if existing.get("request"):
+                            existing["request"]["access_token"] = None
+                if STORE.conversation_closed or not STORE.is_review_demo:
+                    STORE.reset_conversation("Today’s task plan", welcome=False, fixture_media=False, review_demo=True)
+            elif STORE.conversation_closed or STORE.is_review_demo:
+                STORE.reset_conversation()
+            elif not STORE.messages:
+                # Review demos deliberately begin without a transcript. If a
+                # developer then switches back to the normal fixture, restore
+                # its familiar initial message without changing conversation
+                # identity or the review flow.
+                STORE.fixture_media_enabled = True
+                welcome = STORE.add_welcome_message()
+                STORE.event("conversation.snapshot", {"conversation_id": STORE.conversation_id, "messages": [welcome]})
         pairing_id, expires_at = "ps_" + secrets.token_urlsafe(32), time.time() + ttl
         with STORE.lock:
             STORE.pairings[pairing_id] = {"expires_at": expires_at, "status": "created", "request": None,
-                                          "conversation_id": STORE.conversation_id, "approval_mode": approval_mode}
+                                          "conversation_id": STORE.conversation_id, "approval_mode": approval_mode,
+                                          "review_demo": review_demo,
+                                          "service_name": "Baton Review Demo" if review_demo else "Local Baton Mock",
+                                          "conversation_title": "Today’s task plan" if review_demo else "Local test conversation"}
         return self.send_json({"pairing_id": pairing_id,
             "qr_url": f"{STORE.base_url}/.well-known/baton/pair/{pairing_id}",
             "approval_url": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/approval",
@@ -399,7 +437,7 @@ class Handler(BaseHTTPRequestHandler):
             "access_token": token, "token_type": "Bearer", "expires_in": 86400,
             "device_id": request["device_id"],
             "session_id": request["session_id"],
-            "conversation": {"id": pairing["conversation_id"], "title": "Local test conversation"}})
+            "conversation": {"id": pairing["conversation_id"], "title": pairing["conversation_title"]}})
 
     def approval_page(self, pairing_id):
         with STORE.lock:
@@ -437,22 +475,23 @@ class Handler(BaseHTTPRequestHandler):
         image = qrcode.make(f"{STORE.base_url}/.well-known/baton/pair/{pairing_id}")
         output = BytesIO()
         image.save(output, format="PNG")
-        return self.send_png(output.getvalue())
+        return self.send_media(output.getvalue(), "image/png")
 
     def review_demo_page(self):
-        """Stable, opt-in page which creates a fresh short-lived review QR."""
+        """Unified QR pairing and shared-conversation review console."""
         page = '''<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Baton App Review Demo</title><style>
-*{box-sizing:border-box}body{font:16px -apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f7;color:#1d1d1f;margin:0;min-height:100vh;display:grid;place-items:center}.card{max-width:540px;margin:24px;padding:32px;text-align:center;background:#fff;border-radius:24px;box-shadow:0 8px 30px #00000012}.eyebrow{color:#0071e3;font-weight:700;font-size:12px;letter-spacing:.08em;text-transform:uppercase}.title{font-size:28px;margin:10px 0}.copy{color:#6e6e73;line-height:1.5}.qr{width:min(76vw,320px);margin:18px auto;display:block;image-rendering:pixelated}.status{font-weight:600;min-height:24px}.hint{color:#6e6e73;font-size:14px;line-height:1.45}.new{border:0;border-radius:10px;background:#0071e3;color:white;font:inherit;font-weight:600;padding:11px 16px;cursor:pointer}</style>
-<main class="card"><div class="eyebrow">Baton · App Review Demo</div><h1 class="title">Scan to join the demo</h1><p class="copy">Open this page on a separate screen, then scan the QR code with Baton. The demo uses isolated data and creates a fresh, short-lived invitation automatically.</p><img class="qr" id="qr" alt="Short-lived Baton review pairing QR code"><p class="status" id="status">Creating a secure review QR…</p><p class="hint" id="hint"></p><button class="new" id="new">Generate a fresh QR</button><p class="hint"><a href="https://ximatai.net/apps/baton">Learn more about Baton</a></p></main>
+:root{--ink:#172033;--muted:#657083;--blue:#0879eb;--line:#dfe7f0;--paper:#fff;--ground:#edf4fa}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 12% 8%,#ddecff,transparent 31rem),var(--ground);color:var(--ink);font:16px ui-rounded,-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif}main{max-width:1160px;margin:auto;padding:44px 24px}.eyebrow{font-size:12px;font-weight:800;letter-spacing:.12em;color:var(--blue);text-transform:uppercase}.hero{margin-bottom:22px}.hero h1{font-size:clamp(30px,5vw,46px);letter-spacing:-.04em;margin:8px 0}.hero p{max-width:680px;line-height:1.55;color:var(--muted);margin:0}.layout{display:grid;grid-template-columns:minmax(290px,.75fr) minmax(390px,1.35fr);gap:20px}.card{background:color-mix(in srgb,var(--paper) 94%,transparent);border:1px solid #fff;border-radius:24px;box-shadow:0 16px 42px #274a6c18}.pair{padding:28px;text-align:center}.pair h2{margin:8px 0;font-size:23px}.qr{width:min(70vw,280px);margin:18px auto;display:block;image-rendering:pixelated}.status{min-height:24px;font-weight:700}.hint{min-height:40px;color:var(--muted);font-size:14px;line-height:1.45}.actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}.button{border:0;border-radius:11px;padding:11px 15px;font:inherit;font-weight:750;cursor:pointer}.primary{background:var(--blue);color:white}.danger{border:1px solid #f0c8c6;background:#fff;color:#b42318}.button:disabled{opacity:.55;cursor:default}.chat{display:flex;flex-direction:column;height:min(650px,calc(100vh - 155px));min-height:480px;overflow:hidden}.chat-head{display:flex;justify-content:space-between;align-items:center;padding:22px 24px 16px;border-bottom:1px solid var(--line)}.chat-title{font-size:20px;font-weight:780}.online{font-size:13px;color:#168c4a}.messages{min-height:0;flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:12px;background:#f9fbfd}.message{max-width:82%;padding:11px 13px;border-radius:16px;line-height:1.45;white-space:pre-wrap;word-break:break-word}.user{align-self:flex-end;background:var(--blue);color:white;border-bottom-right-radius:5px}.assistant{align-self:flex-start;background:#fff;box-shadow:0 2px 10px #17203312;border-bottom-left-radius:5px}.empty{align-self:center;margin:auto;color:var(--muted);text-align:center}.composer{display:flex;gap:10px;padding:14px;border-top:1px solid var(--line)}.composer input{flex:1;min-width:0;border:1px solid var(--line);border-radius:12px;padding:11px 12px;font:inherit}.composer button{padding:10px 16px}@media(max-width:760px){main{padding:28px 16px}.layout{grid-template-columns:1fr}.chat{height:560px;min-height:440px}}
+</style>
+<main><header class="hero"><div class="eyebrow">Baton · App Review Demo</div><h1>One conversation, two screens.</h1><p>Scan at left with Baton; follow the same live conversation at right. A fresh QR keeps this conversation. Ending it disconnects every device and starts a clean demo.</p></header><div class="layout"><section class="card pair"><div class="eyebrow">Pair a device</div><h2>Scan to join</h2><img class="qr" id="qr" alt="Short-lived Baton review pairing QR code"><p class="status" id="status">Creating a secure review QR…</p><p class="hint" id="hint"></p><div class="actions"><button class="button primary" id="new">Generate a fresh QR</button><button class="button danger" id="end">End and reset demo</button></div></section><section class="card chat"><div class="chat-head"><div><div class="eyebrow">Shared conversation</div><div class="chat-title">Today’s task plan</div></div><div class="online" id="chat-status">Connecting…</div></div><div class="messages" id="messages"></div><form class="composer" id="composer"><input id="text" autocomplete="off" placeholder="Send a message from the web"><button class="button primary">Send</button></form></section></div></main>
 <script>
-let expiresAt=0, timer=null; const $=id=>document.getElementById(id); const pairingEndpoint=location.pathname==='/'?'/pairing':location.pathname+'/pairing';
-function show(text,hint=''){$('status').textContent=text;$('hint').textContent=hint;}
-async function create(){clearInterval(timer);show('Creating a secure review QR…');const response=await fetch(pairingEndpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!response.ok){show('Could not create the review QR.','Please reload this page.');return}const pairing=await response.json();$('qr').src='/v1/baton/pairings/'+pairing.pairing_id+'/qr.png';expiresAt=Date.parse(pairing.expires_at);tick();timer=setInterval(tick,1000);}
-function tick(){const seconds=Math.max(0,Math.ceil((expiresAt-Date.now())/1000));if(!seconds){clearInterval(timer);create();return}show('Ready to scan.','This QR expires in '+seconds+' seconds and is valid for one device.');}
-$('new').onclick=create; create();
+let expiresAt=0,timer=null,stream=null,ended=false;const $=id=>document.getElementById(id),messages=new Map(),pairingEndpoint=location.pathname==='/'?'/pairing':location.pathname+'/pairing',reviewAction=__REVIEW_ACTION_TOKEN__;
+function show(text,hint=''){$('status').textContent=text;$('hint').textContent=hint}function render(){const list=$('messages');list.replaceChildren();if(!messages.size){const empty=document.createElement('div');empty.className='message empty';empty.textContent='Start the shared conversation from Baton or the web.';list.append(empty)}for(const message of messages.values()){const item=document.createElement('div');item.className='message '+(message.role==='user'?'user':'assistant');item.textContent=(message.content||[]).map(part=>part.text||'').join('')||(message.status==='streaming'?'Thinking…':'');list.append(item)}list.scrollTop=list.scrollHeight}function put(message){if(message&&message.id){messages.set(message.id,message);render()}}function update(id,fn){const message=messages.get(id)||{id,role:'assistant',content:[{type:'text',text:''}],status:'streaming'};fn(message);messages.set(id,message);render()}
+async function create(){clearInterval(timer);show('Creating a secure review QR…');const response=await fetch(pairingEndpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!response.ok){show('Could not create the review QR.','Please reload this page.');return}const pairing=await response.json();$('qr').src='/v1/baton/pairings/'+pairing.pairing_id+'/qr.png';expiresAt=Date.parse(pairing.expires_at);tick();timer=setInterval(tick,1000)}function tick(){const seconds=Math.max(0,Math.ceil((expiresAt-Date.now())/1000));if(!seconds){clearInterval(timer);create();return}show('Ready to scan.','This QR expires in '+seconds+' seconds and is valid for one device.')}
+async function load(){const response=await fetch('/v1/baton/mock/web/conversation');if(!response.ok)throw Error();const snapshot=await response.json();messages.clear();snapshot.messages.slice().reverse().forEach(put);$('chat-status').textContent='Live · Baton Review Demo'}function subscribe(){if(stream)stream.close();stream=new EventSource('/v1/baton/mock/web/events');stream.onopen=()=>{$('chat-status').textContent='Live · Baton Review Demo'};stream.addEventListener('message.created',e=>put(JSON.parse(e.data).data));stream.addEventListener('message.delta',e=>{const d=JSON.parse(e.data).data;update(d.message_id,m=>{m.content=m.content||[{type:'text',text:''}];m.content[0].text=(m.content[0].text||'')+d.delta;m.status='streaming'})});stream.addEventListener('message.completed',e=>update(JSON.parse(e.data).data.message_id,m=>m.status='completed'));stream.addEventListener('conversation.closed',()=>{$('chat-status').textContent='Conversation ended';ended=true;$('text').disabled=true})}
+function messageID(){if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.floor(Math.random()*16),v=c==='x'?r:(r&3)|8;return v.toString(16)})}$('composer').onsubmit=async e=>{e.preventDefault();const input=$('text'),text=input.value.trim();if(!text||ended)return;input.disabled=true;try{const r=await fetch('/v1/baton/mock/web/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_message_id:messageID(),content:[{type:'text',text}]})});if(!r.ok)throw Error();input.value='';$('chat-status').textContent='Sending…';await load()}catch{$('chat-status').textContent='Send failed — retry.'}finally{input.disabled=false;input.focus()}};$('new').onclick=create;$('end').onclick=async()=>{if(!confirm('End this demo conversation? Connected Baton devices will be disconnected.'))return;$('end').disabled=true;$('new').disabled=true;const r=await fetch('/conversation:end',{method:'POST',headers:{'Content-Type':'application/json','X-Baton-Review-Action':reviewAction},body:'{}'});if(!r.ok){$('chat-status').textContent='Could not end conversation.';$('end').disabled=false;$('new').disabled=false;return}ended=false;$('text').disabled=false;messages.clear();render();await create();subscribe();await load();$('end').disabled=false;$('new').disabled=false};render();subscribe();load().catch(()=>{$('chat-status').textContent='Could not load conversation.'});create();
 </script>'''
-        return self.send_html(page)
+        return self.send_html(page.replace("__REVIEW_ACTION_TOKEN__", json.dumps(REVIEW_ACTION_TOKEN)))
 
     def console_page(self):
         """Human-facing fixture console; never a Companion Profile endpoint."""
@@ -545,15 +584,22 @@ create();
                 for run_id, run in STORE.runs.items()
                 if run["status"] == "active" and run["epoch"] == STORE.conversation_epoch
             ]
-            return self.send_json({"id": STORE.conversation_id, "title": "Local test conversation", "agent_name": "Mock Agent",
+            return self.send_json({"id": STORE.conversation_id, "title": STORE.conversation_title, "agent_name": "Mock Agent",
                                    "messages": list(reversed(STORE.messages)),
                                    "event_cursor": STORE.event_cursor(), "active_runs": active_runs})
 
     def do_POST(self):
         path, raw = urlparse(self.path).path.rstrip("/"), self.raw_body()
+        if REVIEW_DEMO_TOKEN and path == "/conversation:end":
+            action = self.headers.get("X-Baton-Review-Action", "")
+            if not secrets.compare_digest(action, REVIEW_ACTION_TOKEN):
+                return self.error(403, "review_action_forbidden", "This review action must originate from the demo page.")
+            with STORE.lock: ended = STORE.close_conversation()
+            return self.send_json({"status": "ended" if ended else "already_ended"})
         if REVIEW_DEMO_TOKEN and path == f"/review/{REVIEW_DEMO_TOKEN}/pairing":
             # This route is separate from normal pairing, which stays manual by default.
-            return self.create_pairing({"approval_mode": "auto", "mock_ttl_seconds": REVIEW_DEMO_TTL_SECONDS})
+            return self.create_pairing({"approval_mode": "auto", "mock_ttl_seconds": REVIEW_DEMO_TTL_SECONDS,
+                                        "review_demo": True})
         if path.startswith("/review/"):
             return self.error(404, "not_found", "Not found.")
         prefix = "/v1/baton/pairings/"
@@ -675,11 +721,12 @@ create();
             message = next(item for item in STORE.messages if item["id"] == message_id)
             message["status"] = "completed"
             STORE.event("message.completed", {"message_id": message_id, "status": "completed"})
-            appended = [{"type": "image", "media_id": DEMO_IMAGE_ID,
-                         "url": STORE.base_url + DEMO_IMAGE_PATH, "mime_type": "image/png",
-                         "width": 320, "height": 200, "alt": DEMO_IMAGE_ALT}]
-            message["content"].extend(copy.deepcopy(appended))
-            STORE.event("message.content.appended", {"message_id": message_id, "content": appended})
+            if STORE.fixture_media_enabled:
+                appended = [{"type": "image", "media_id": DEMO_IMAGE_ID,
+                             "url": STORE.base_url + DEMO_IMAGE_PATH, "mime_type": "image/png",
+                             "width": 320, "height": 200, "alt": DEMO_IMAGE_ALT}]
+                message["content"].extend(copy.deepcopy(appended))
+                STORE.event("message.content.appended", {"message_id": message_id, "content": appended})
             STORE.event("run.completed", {"run_id": run_id, "status": "completed"})
         fixture_log("agent.reply.completed")
 
@@ -698,8 +745,8 @@ create();
                 if not pairing: return
             return self.send_json({"protocol": "baton/1.1", "pairing_id": pairing_id,
                 "expires_at": datetime.fromtimestamp(pairing["expires_at"], timezone.utc).isoformat().replace("+00:00", "Z"),
-                "service": {"id": "local-mock", "name": "Local Baton Mock"},
-                "conversation": {"id": pairing["conversation_id"], "title": "Local test conversation", "agent_name": "Mock Agent"},
+                "service": {"id": "local-mock", "name": pairing["service_name"]},
+                "conversation": {"id": pairing["conversation_id"], "title": pairing["conversation_title"], "agent_name": "Mock Agent"},
                 "approval_mode": pairing["approval_mode"],
                 "endpoints": {"join": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/requests",
                               "approval": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/approval",
@@ -805,7 +852,7 @@ create();
 
 
 def main():
-    global STORE, CHAT_COMPLETER, SSE_LIVE_SECONDS, REVIEW_DEMO_TOKEN
+    global STORE, CHAT_COMPLETER, SSE_LIVE_SECONDS, REVIEW_DEMO_TOKEN, REVIEW_ACTION_TOKEN
     parser = argparse.ArgumentParser(description="Local Baton Companion mock server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
@@ -837,6 +884,7 @@ def main():
         )
     SSE_LIVE_SECONDS = args.sse_live_seconds
     REVIEW_DEMO_TOKEN = args.review_demo_token
+    REVIEW_ACTION_TOKEN = secrets.token_urlsafe(24) if REVIEW_DEMO_TOKEN else None
     STORE = Store(args.public_base_url or f"http://{args.host}:{args.port}", event_retention=args.event_retention)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     provider = f" with OpenAI-compatible model {args.openai_model}" if CHAT_COMPLETER else " with deterministic replies"
