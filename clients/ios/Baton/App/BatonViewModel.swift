@@ -72,6 +72,8 @@ final class BatonViewModel: ObservableObject {
     /// action, not to the whole Conversation list or connection state.
     @Published private(set) var sessionActionError: String?
     @Published private(set) var isSendingMessage = false
+    /// Pairing completion is an event, including rejoining the active conversation.
+    @Published private(set) var completedPairingSessionID: String?
     /// Owns the in-memory, authenticated media cache for the selected
     /// conversation. Views receive this narrow loader, never a credential.
     @Published private(set) var imageLoader: BatonImageLoader?
@@ -85,6 +87,7 @@ final class BatonViewModel: ObservableObject {
     /// suspended conversation cannot become read when an old response lands.
     private var snapshotTask: Task<Void, Never>?
     private var streamTask: Task<Void, Never>?
+    private var pairingConnectTask: Task<Void, Never>?
     private var pairingPollTask: Task<Void, Never>?
     private var pendingPairing: PendingPairingCredential?
     private var reducer = ConversationEventReducer()
@@ -169,37 +172,58 @@ final class BatonViewModel: ObservableObject {
     }
 
     func connectLocalDemo() {
+        pairingConnectTask?.cancel()
+        completedPairingSessionID = nil
         beginBusy(String(localized: "正在创建本地 Pairing…"))
-        Task {
-            do { let url = try await api.createLocalPairing(); await connect(url: url) }
-            catch { failConnection(error) }
+        pairingConnectTask = Task { [weak self, api] in
+            do {
+                let url = try await api.createLocalPairing()
+                try Task.checkCancellation()
+                await self?.connect(url: url)
+            } catch is CancellationError {
+                return
+            } catch {
+                self?.failConnection(error)
+            }
+            self?.pairingConnectTask = nil
         }
     }
 
     func connect(pairingURL: String) {
         guard let url = URL(string: pairingURL.trimmingCharacters(in: .whitespacesAndNewlines)) else { errorMessage = CompanionAPIError.invalidPairingURL.localizedDescription; return }
+        pairingConnectTask?.cancel()
+        completedPairingSessionID = nil
         beginBusy(String(localized: "正在发现服务…"))
-        Task { await connect(url: url) }
+        pairingConnectTask = Task { [weak self] in
+            await self?.connect(url: url)
+            guard !Task.isCancelled else { return }
+            self?.pairingConnectTask = nil
+        }
     }
 
     private func connect(url: URL) async {
         do {
             lastPairingURL = url.absoluteString
             let document = try await api.discover(pairingURL: url)
+            try Task.checkCancellation()
             connectionStatus = String(format: String(localized: "正在请求加入 %@…"), locale: .current, document.service.name)
             let deviceProof = try makeDeviceProof()
             let request = try await api.join(document, deviceID: deviceID, deviceName: UIDevice.current.name, deviceProof: deviceProof)
+            try Task.checkCancellation()
             let pending = PendingPairingCredential(document: document, request: request, deviceID: deviceID, deviceProof: deviceProof)
             // Persist before polling: an app termination after browser approval must not
             // strand a proof-bound token that this device is entitled to claim.
             try KeychainStore.savePending(pending)
             beginWaitingForApproval(pending)
+        } catch is CancellationError {
+            // Explicit cancellation must not turn into a visible connection failure.
         } catch { failConnection(error) }
     }
 
     /// Cancels only the local wait. The server-side request remains harmless because
     /// it cannot be claimed without the proof that is deleted here.
     func cancelPendingPairing() {
+        pairingConnectTask?.cancel(); pairingConnectTask = nil
         pairingPollTask?.cancel(); pairingPollTask = nil
         pendingPairing = nil; KeychainStore.deletePending()
         isWaitingForApproval = false; isBusy = false
@@ -741,6 +765,7 @@ final class BatonViewModel: ObservableObject {
                     pendingServiceName = nil; pendingConversationTitle = nil; pendingApprovalURL = nil; pendingApprovalMode = nil
                     isBusy = false
                     activateSession(newCredential)
+                    completedPairingSessionID = newCredential.conversationKey
                     pairingPollTask = nil
                     return
                 case "rejected":
@@ -890,13 +915,14 @@ final class BatonViewModel: ObservableObject {
         composerText = ""
         draftMessageText = nil
         draftMessageID = nil
+        // Publish the title before the session identity used for navigation.
+        conversation = selectedCredential.conversation
         credential = selectedCredential
         isSendingMessage = false
         let localStore = ConversationLocalStore(credential: selectedCredential)
         imageLoader = BatonImageLoader(endpoint: selectedCredential.conversationEndpoint, token: selectedCredential.accessToken, localStore: localStore) { [weak self] in
             self?.discardTerminatedActiveSession(detail: String(localized: "媒体访问凭据已失效，请重新连接。"), matching: selectedCredential)
         }
-        conversation = selectedCredential.conversation
         messages = []
         reducer = ConversationEventReducer()
         activeRunID = nil

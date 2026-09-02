@@ -194,9 +194,43 @@ class OpenAICompatibleChatCompleter:
     semantics owned by the Baton run rather than an external provider's SSE.
     """
 
-    def __init__(self, endpoint, model, api_key, reasoning_effort=None):
+    def __init__(self, endpoint, model, api_key, reasoning_effort=None, warm_interval_seconds=600):
         self.endpoint, self.model, self.api_key = endpoint, model, api_key
         self.reasoning_effort = reasoning_effort
+        self.warm_interval_seconds = warm_interval_seconds
+        self.warm_lock = threading.Lock()
+        self.last_warm_attempt = 0.0
+        self.warm_in_flight = False
+
+    def schedule_warm_up(self):
+        """Start at most one best-effort warm-up worker for this fixture."""
+        now_monotonic = time.monotonic()
+        with self.warm_lock:
+            if self.warm_in_flight or now_monotonic - self.last_warm_attempt < self.warm_interval_seconds:
+                return
+            self.last_warm_attempt = now_monotonic
+            self.warm_in_flight = True
+        threading.Thread(target=self.warm_up, daemon=True).start()
+
+    def warm_up(self):
+        """Keep an optional local model resident without touching a conversation."""
+        payload = {"model": self.model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 1, "temperature": 0}
+        if self.reasoning_effort:
+            payload["reasoning_effort"] = self.reasoning_effort
+        request = urlrequest.Request(self.endpoint, data=json.dumps(payload).encode(), method="POST", headers={
+            "Authorization": "Bearer " + self.api_key,
+            "Content-Type": "application/json",
+        })
+        try:
+            with urlrequest.urlopen(request, timeout=90):
+                pass
+            fixture_log("model.warm.completed")
+        except (OSError, ValueError):
+            # Warming is best-effort: QR creation and a later real turn remain usable.
+            fixture_log("model.warm.failed")
+        finally:
+            with self.warm_lock:
+                self.warm_in_flight = False
 
     def complete(self, messages):
         latest_user = next((message for message in reversed(messages) if message["role"] == "user"), None)
@@ -339,13 +373,12 @@ class Handler(BaseHTTPRequestHandler):
             return self.error(400, "invalid_review_demo", "review_demo must be a boolean.")
         with STORE.lock:
             if review_demo:
-                # A fresh QR supersedes an unscanned earlier invitation, but
-                # remains attached to the active review conversation.
+                # A fresh QR supersedes only unscanned invitations. Once a
+                # device has scanned, its auto-approved request must remain
+                # claimable while the page displays the next single-use QR.
                 for existing in STORE.pairings.values():
-                    if existing.get("review_demo"):
+                    if existing.get("review_demo") and existing["status"] == "created":
                         existing["status"] = "expired"
-                        if existing.get("request"):
-                            existing["request"]["access_token"] = None
                 if STORE.conversation_closed or not STORE.is_review_demo:
                     STORE.reset_conversation("Today’s task plan", welcome=False, fixture_media=False, review_demo=True)
             elif STORE.conversation_closed or STORE.is_review_demo:
@@ -365,6 +398,8 @@ class Handler(BaseHTTPRequestHandler):
                                           "review_demo": review_demo,
                                           "service_name": "Baton Review Demo" if review_demo else "Local Baton Mock",
                                           "conversation_title": "Today’s task plan" if review_demo else "Local test conversation"}
+        if CHAT_COMPLETER:
+            CHAT_COMPLETER.schedule_warm_up()
         return self.send_json({"pairing_id": pairing_id,
             "qr_url": f"{STORE.base_url}/.well-known/baton/pair/{pairing_id}",
             "approval_url": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/approval",
@@ -485,9 +520,9 @@ class Handler(BaseHTTPRequestHandler):
 </style>
 <main><header class="hero"><div class="eyebrow">Baton · App Review Demo</div><h1>One conversation, two screens.</h1><p>Scan at left with Baton; follow the same live conversation at right. A fresh QR keeps this conversation. Ending it disconnects every device and starts a clean demo.</p></header><div class="layout"><section class="card pair"><div class="eyebrow">Pair a device</div><h2>Scan to join</h2><img class="qr" id="qr" alt="Short-lived Baton review pairing QR code"><p class="status" id="status">Creating a secure review QR…</p><p class="hint" id="hint"></p><div class="actions"><button class="button primary" id="new">Generate a fresh QR</button><button class="button danger" id="end">End and reset demo</button></div></section><section class="card chat"><div class="chat-head"><div><div class="eyebrow">Shared conversation</div><div class="chat-title">Today’s task plan</div></div><div class="online" id="chat-status">Connecting…</div></div><div class="messages" id="messages"></div><form class="composer" id="composer"><input id="text" autocomplete="off" placeholder="Send a message from the web"><button class="button primary">Send</button></form></section></div></main>
 <script>
-let expiresAt=0,timer=null,stream=null,ended=false;const $=id=>document.getElementById(id),messages=new Map(),pairingEndpoint=location.pathname==='/'?'/pairing':location.pathname+'/pairing',reviewAction=__REVIEW_ACTION_TOKEN__;
+let expiresAt=0,timer=null,pairingTimer=null,pairingID=null,creating=false,createQueued=false,stream=null,ended=false;const $=id=>document.getElementById(id),messages=new Map(),pairingEndpoint=location.pathname==='/'?'/pairing':location.pathname+'/pairing',reviewAction=__REVIEW_ACTION_TOKEN__;
 function show(text,hint=''){$('status').textContent=text;$('hint').textContent=hint}function render(){const list=$('messages');list.replaceChildren();if(!messages.size){const empty=document.createElement('div');empty.className='message empty';empty.textContent='Start the shared conversation from Baton or the web.';list.append(empty)}for(const message of messages.values()){const item=document.createElement('div');item.className='message '+(message.role==='user'?'user':'assistant');item.textContent=(message.content||[]).map(part=>part.text||'').join('')||(message.status==='streaming'?'Thinking…':'');list.append(item)}list.scrollTop=list.scrollHeight}function put(message){if(message&&message.id){messages.set(message.id,message);render()}}function update(id,fn){const message=messages.get(id)||{id,role:'assistant',content:[{type:'text',text:''}],status:'streaming'};fn(message);messages.set(id,message);render()}
-async function create(){clearInterval(timer);show('Creating a secure review QR…');const response=await fetch(pairingEndpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!response.ok){show('Could not create the review QR.','Please reload this page.');return}const pairing=await response.json();$('qr').src='/v1/baton/pairings/'+pairing.pairing_id+'/qr.png';expiresAt=Date.parse(pairing.expires_at);tick();timer=setInterval(tick,1000)}function tick(){const seconds=Math.max(0,Math.ceil((expiresAt-Date.now())/1000));if(!seconds){clearInterval(timer);create();return}show('Ready to scan.','This QR expires in '+seconds+' seconds and is valid for one device.')}
+async function create(){if(creating){createQueued=true;return}creating=true;clearInterval(timer);clearInterval(pairingTimer);pairingTimer=null;pairingID=null;show('Creating a secure review QR…');try{const response=await fetch(pairingEndpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!response.ok){show('Could not create the review QR.','Please reload this page.');return}const pairing=await response.json();pairingID=pairing.pairing_id;$('qr').src='/v1/baton/pairings/'+pairingID+'/qr.png';expiresAt=Date.parse(pairing.expires_at);tick();timer=setInterval(tick,1000);pairingTimer=setInterval(checkPairing,1000)}catch{show('Could not create the review QR.','Please reload this page.')}finally{creating=false;if(createQueued){createQueued=false;create()}}}async function checkPairing(){if(!pairingID)return;try{const response=await fetch('/v1/baton/pairings/'+pairingID+'/mock-status');if(response.status===404||response.status===410){await create();return}if(!response.ok)return;const pairing=await response.json();if(pairing.status==='created')return;clearInterval(pairingTimer);pairingTimer=null;show('A device joined. Generating a fresh QR…','The connected device remains in this conversation.');await create()}catch{/* The current QR remains usable if this observer request fails. */}}function tick(){const seconds=Math.max(0,Math.ceil((expiresAt-Date.now())/1000));if(!seconds){clearInterval(timer);create();return}show('Ready to scan.','This QR expires in '+seconds+' seconds and is valid for one device.')}
 async function load(){const response=await fetch('/v1/baton/mock/web/conversation');if(!response.ok)throw Error();const snapshot=await response.json();messages.clear();snapshot.messages.slice().reverse().forEach(put);$('chat-status').textContent='Live · Baton Review Demo'}function subscribe(){if(stream)stream.close();stream=new EventSource('/v1/baton/mock/web/events');stream.onopen=()=>{$('chat-status').textContent='Live · Baton Review Demo'};stream.addEventListener('message.created',e=>put(JSON.parse(e.data).data));stream.addEventListener('message.delta',e=>{const d=JSON.parse(e.data).data;update(d.message_id,m=>{m.content=m.content||[{type:'text',text:''}];m.content[0].text=(m.content[0].text||'')+d.delta;m.status='streaming'})});stream.addEventListener('message.completed',e=>update(JSON.parse(e.data).data.message_id,m=>m.status='completed'));stream.addEventListener('conversation.closed',()=>{$('chat-status').textContent='Conversation ended';ended=true;$('text').disabled=true})}
 function messageID(){if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.floor(Math.random()*16),v=c==='x'?r:(r&3)|8;return v.toString(16)})}$('composer').onsubmit=async e=>{e.preventDefault();const input=$('text'),text=input.value.trim();if(!text||ended)return;input.disabled=true;try{const r=await fetch('/v1/baton/mock/web/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_message_id:messageID(),content:[{type:'text',text}]})});if(!r.ok)throw Error();input.value='';$('chat-status').textContent='Sending…';await load()}catch{$('chat-status').textContent='Send failed — retry.'}finally{input.disabled=false;input.focus()}};$('new').onclick=create;$('end').onclick=async()=>{if(!confirm('End this demo conversation? Connected Baton devices will be disconnected.'))return;$('end').disabled=true;$('new').disabled=true;const r=await fetch('/conversation:end',{method:'POST',headers:{'Content-Type':'application/json','X-Baton-Review-Action':reviewAction},body:'{}'});if(!r.ok){$('chat-status').textContent='Could not end conversation.';$('end').disabled=false;$('new').disabled=false;return}ended=false;$('text').disabled=false;messages.clear();render();await create();subscribe();await load();$('end').disabled=false;$('new').disabled=false};render();subscribe();load().catch(()=>{$('chat-status').textContent='Could not load conversation.'});create();
 </script>'''
@@ -863,10 +898,13 @@ def main():
     parser.add_argument("--openai-chat-completions-url", help="optional OpenAI-compatible chat completion endpoint")
     parser.add_argument("--openai-model", help="model for the optional OpenAI-compatible endpoint")
     parser.add_argument("--openai-reasoning-effort", choices=("none", "low", "medium", "high"), help="optional provider-specific reasoning setting")
+    parser.add_argument("--model-warm-interval-seconds", type=int, default=600, help="minimum interval between optional model warm-up requests")
     parser.add_argument("--api-key-env", default="LM_STUDIO_KEY", help="environment variable holding the optional provider key")
     args = parser.parse_args()
     if args.sse_live_seconds < 1:
         parser.error("--sse-live-seconds must be positive")
+    if args.model_warm_interval_seconds < 1:
+        parser.error("--model-warm-interval-seconds must be positive")
     if args.review_demo_token is not None and len(args.review_demo_token) < 16:
         parser.error("--review-demo-token must contain at least 16 characters")
     if bool(args.openai_chat_completions_url) != bool(args.openai_model):
@@ -881,6 +919,7 @@ def main():
             args.openai_model,
             api_key,
             reasoning_effort=args.openai_reasoning_effort,
+            warm_interval_seconds=args.model_warm_interval_seconds,
         )
     SSE_LIVE_SECONDS = args.sse_live_seconds
     REVIEW_DEMO_TOKEN = args.review_demo_token

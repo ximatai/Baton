@@ -2,6 +2,12 @@ import SwiftUI
 
 struct PairingWaitView: View {
     @ObservedObject var model: BatonViewModel
+    let cancel: (() -> Void)?
+
+    init(model: BatonViewModel, cancel: (() -> Void)? = nil) {
+        self.model = model
+        self.cancel = cancel
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -27,7 +33,7 @@ struct PairingWaitView: View {
                 .buttonStyle(.borderedProminent)
                 .accessibilityHint("在服务端网页中确认或拒绝此设备请求")
             }
-            Button("取消等待", role: .cancel) { model.cancelPendingPairing() }
+            Button("取消等待", role: .cancel) { (cancel ?? model.cancelPendingPairing)() }
                 .font(.subheadline)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }

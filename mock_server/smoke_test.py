@@ -41,6 +41,7 @@ if REVIEW_DEMO_TOKEN:
     # normal, short-lived, auto-approved invitation for a single scanner.
     status, page = request(f"/review/{REVIEW_DEMO_TOKEN}", expect_json=False)
     assert status == 200 and "App Review Demo" in page
+    assert REVIEW_DEMO_TOKEN not in page
     action_match = re.search(r'reviewAction=("[^"]+")', page)
     assert action_match
     review_action = json.loads(action_match.group(1))
@@ -58,6 +59,21 @@ if REVIEW_DEMO_TOKEN:
     assert status == 410
     status, next_review_discovery = request("/.well-known/baton/pair/" + next_review_pair["pairing_id"])
     assert status == 200 and next_review_discovery["conversation"]["id"] == review_conversation_id
+    review_proof = "review_proof_" + uuid.uuid4().hex + uuid.uuid4().hex
+    status, review_join = request("/v1/baton/pairings/" + next_review_pair["pairing_id"] + "/requests", "POST",
+                                  {"device_id": "review-smoke", "device_name": "Review Smoke", "device_proof": review_proof})
+    assert status == 202 and review_join["status"] == "approved"
+    status, review_pair_status = request("/v1/baton/pairings/" + next_review_pair["pairing_id"] + "/mock-status")
+    assert status == 200 and review_pair_status["status"] == "approved"
+    # The review page may immediately show the next QR after a scan. That
+    # must not revoke the scanned device before it claims its proof-bound token.
+    status, post_scan_pair = request(f"/review/{REVIEW_DEMO_TOKEN}/pairing", "POST", {})
+    assert status == 200 and post_scan_pair["pairing_id"] != next_review_pair["pairing_id"]
+    status, scanned_discovery = request("/.well-known/baton/pair/" + next_review_pair["pairing_id"])
+    assert status == 200 and scanned_discovery["conversation"]["id"] == review_conversation_id
+    status, review_credential = request("/v1/baton/pairings/" + next_review_pair["pairing_id"] + "/requests/" + review_join["request_id"],
+                                        extra_headers={"X-Baton-Device-Proof": review_proof})
+    assert status == 200 and review_credential["pairing_status"] == "consumed"
     status, forbidden_end = request("/conversation:end", "POST", {})
     assert status == 403 and forbidden_end["error"]["code"] == "review_action_forbidden"
     status, ended_review = request("/conversation:end", "POST", {}, extra_headers={"X-Baton-Review-Action": review_action})

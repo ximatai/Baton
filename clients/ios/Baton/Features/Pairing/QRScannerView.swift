@@ -44,7 +44,6 @@ private func scannerAvailability() -> QRScannerAvailability {
 /// know about pairings, tokens, or conversation state.
 struct QRScannerSheet: View {
     let onPairingURL: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
     @State private var availability = scannerAvailability()
     @State private var isRequestingPermission = false
 
@@ -55,7 +54,6 @@ struct QRScannerSheet: View {
                 case .available:
                     QRCodeScannerView { rawValue in
                         guard let url = BatonPairingURLParser.parse(rawValue) else { return }
-                        dismiss()
                         onPairingURL(url.absoluteString)
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 20))
@@ -85,12 +83,6 @@ struct QRScannerSheet: View {
                         title: "当前环境不能扫码",
                         message: "模拟器或无相机设备不能扫描二维码。请在真机上继续。"
                     )
-                }
-            }
-            .navigationTitle("扫描二维码")
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("返回") { dismiss() }
                 }
             }
         }

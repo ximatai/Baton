@@ -28,7 +28,14 @@ struct ConversationView: View {
                 }
                 .scrollDismissesKeyboard(.interactively)
                 .background(Color(uiColor: .systemGroupedBackground))
-                .onChange(of: model.messages) { _, messages in if let last = messages.last { proxy.scrollTo(last.id, anchor: .bottom) } }
+                .onChange(of: model.messages) { _, messages in
+                    scrollToLatest(messages, using: proxy)
+                }
+                // Also scroll cached history on the destination's first appearance.
+                .task(id: model.messages.last?.id) {
+                    await Task.yield()
+                    scrollToLatest(model.messages, using: proxy)
+                }
             }
             if let error = model.errorMessage {
                 ErrorNotice(text: error, retry: { model.reconnect() })
@@ -181,5 +188,11 @@ struct ConversationView: View {
         if isVoiceCancellationArmed { return .orange }
         if isVoiceLongPressActive { return Color.accentColor }
         return .primary.opacity(0.12)
+    }
+
+    @MainActor
+    private func scrollToLatest(_ messages: [ConversationMessage], using proxy: ScrollViewProxy) {
+        guard let last = messages.last else { return }
+        proxy.scrollTo(last.id, anchor: .bottom)
     }
 }
