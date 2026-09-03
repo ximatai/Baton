@@ -3,7 +3,14 @@ import SwiftUI
 struct MessageBubble: View {
     let message: ConversationMessage
     let imageLoader: BatonImageLoader?
+    let selectionStates: [String: SelectionInteractionState]
+    let submitSelection: (MessageSelection, MessageSelectionOption) -> Void
     private let contentPadding: CGFloat = 10
+    private var isStandaloneSelection: Bool {
+        guard message.role == .assistant, message.content.count == 1,
+              case .selection = message.content[0] else { return false }
+        return true
+    }
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
@@ -14,14 +21,14 @@ struct MessageBubble: View {
                     .frame(width: 26, height: 26)
                     .background(Color.accentColor.opacity(0.12), in: Circle())
                     .accessibilityHidden(true)
-                MessageContentStack(message: message, imageLoader: imageLoader)
-                    .padding(contentPadding)
-                    .background(.background, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                    .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.primary.opacity(0.07)) }
+                MessageContentStack(message: message, imageLoader: imageLoader, selectionStates: selectionStates, submitSelection: submitSelection, selectionFillsMessageBubble: isStandaloneSelection)
+                    .padding(isStandaloneSelection ? 0 : contentPadding)
+                    .background(isStandaloneSelection ? Color.clear : Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .overlay { RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(isStandaloneSelection ? Color.clear : Color.primary.opacity(0.07)) }
                 Spacer(minLength: 48)
             } else {
                 Spacer(minLength: 48)
-                MessageContentStack(message: message, imageLoader: imageLoader)
+                MessageContentStack(message: message, imageLoader: imageLoader, selectionStates: selectionStates, submitSelection: submitSelection, selectionFillsMessageBubble: false)
                     .padding(contentPadding)
                     .foregroundStyle(.white)
                     .background(Color.accentColor.gradient, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -33,6 +40,9 @@ struct MessageBubble: View {
 private struct MessageContentStack: View {
     let message: ConversationMessage
     let imageLoader: BatonImageLoader?
+    let selectionStates: [String: SelectionInteractionState]
+    let submitSelection: (MessageSelection, MessageSelectionOption) -> Void
+    let selectionFillsMessageBubble: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -63,6 +73,16 @@ private struct MessageContentStack: View {
                                 )
                             }
                         }
+                    case let .selection(selection):
+                        SelectionCard(
+                            selection: selection,
+                            state: selectionStates[selection.interactionID],
+                            fillsMessageBubble: selectionFillsMessageBubble,
+                            submit: { option in submitSelection(selection, option) }
+                        )
+                    case let .selectionResponse(response):
+                        Label(response.label.map { String(format: String(localized: "已选择：%@"), $0) } ?? String(localized: "已完成选择"), systemImage: "checkmark.circle.fill")
+                            .font(.subheadline)
                     case let .unsupported(type, alt):
                         Label(alt ?? "此内容暂不支持（\(type)）", systemImage: "questionmark.square.dashed")
                             .font(.footnote)
@@ -80,6 +100,114 @@ private struct MessageContentStack: View {
 
     private func imageRun(startingAt index: Int) -> [MessageImage] {
         message.content[index...].prefix { $0.image != nil }.compactMap(\.image)
+    }
+}
+
+private struct SelectionCard: View {
+    let selection: MessageSelection
+    let state: SelectionInteractionState?
+    let fillsMessageBubble: Bool
+    let submit: (MessageSelectionOption) -> Void
+
+    private var isOpen: Bool { state?.status == .open }
+    private var requiresSelection: Bool { selection.inputPolicy == .selectionRequired }
+    private var backgroundColor: Color {
+        requiresSelection ? .orange.opacity(0.13) : Color.accentColor.opacity(0.08)
+    }
+
+    var body: some View {
+        Group {
+            if let state, state.status != .open {
+                Label(selectionStatusText(state), systemImage: selectionStatusSymbol(state))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(selection.prompt)
+                        .font(.subheadline.weight(.medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                    if selection.presentation == .confirmation {
+                        HStack(spacing: 8) {
+                            ForEach(selection.options) { option in
+                                selectionButton(option)
+                                    .frame(maxWidth: .infinity)
+                            }
+                        }
+                    } else {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 8) {
+                                ForEach(selection.options) { option in
+                                    selectionButton(option, keepsLabelOnOneLine: true)
+                                        .frame(maxWidth: .infinity)
+                                }
+                            }
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(selection.options) { option in
+                                    selectionButton(option)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(fillsMessageBubble ? 14 : 10)
+        .background(backgroundColor, in: RoundedRectangle(cornerRadius: fillsMessageBubble ? 18 : 12, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: fillsMessageBubble ? 18 : 12, style: .continuous).strokeBorder(fillsMessageBubble ? Color.primary.opacity(0.07) : Color.clear) }
+        .accessibilityLabel(requiresSelection ? "需要完成选择：\(selection.prompt)" : selection.prompt)
+    }
+
+    private func selectionStatusText(_ state: SelectionInteractionState) -> String {
+        switch state.status {
+        case .open: return ""
+        case .answered:
+            guard let optionID = state.selectedOptionID,
+                  let option = selection.options.first(where: { $0.id == optionID }) else {
+                return String(localized: "已完成选择")
+            }
+            return String(format: String(localized: "已选择：%@"), option.label)
+        case .cancelled: return String(localized: "此选择已取消")
+        case .superseded: return String(localized: "此选择已更新")
+        case .expired: return String(localized: "此选择已过期")
+        }
+    }
+
+    private func selectionStatusSymbol(_ state: SelectionInteractionState) -> String {
+        switch state.status {
+        case .answered:
+            if selection.presentation == .confirmation, state.selectedOptionID == "cancel" {
+                return "xmark.circle.fill"
+            }
+            return "checkmark.circle.fill"
+        case .cancelled, .superseded, .expired: return "minus.circle"
+        case .open: return "circle"
+        }
+    }
+
+    private func isConfirmationAction(_ option: MessageSelectionOption) -> Bool {
+        selection.presentation == .confirmation && option.id == "confirm"
+    }
+
+    @ViewBuilder
+    private func selectionButton(_ option: MessageSelectionOption, keepsLabelOnOneLine: Bool = false) -> some View {
+        if isConfirmationAction(option) {
+            Button { submit(option) } label: {
+                Text(option.label)
+                    .fixedSize(horizontal: keepsLabelOnOneLine, vertical: false)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!isOpen)
+            .accessibilityHint(isOpen ? "点按后立即发送" : "此选择已结束")
+        } else {
+            Button { submit(option) } label: {
+                Text(option.label)
+                    .fixedSize(horizontal: keepsLabelOnOneLine, vertical: false)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!isOpen)
+            .accessibilityHint(isOpen ? "点按后立即发送" : "此选择已结束")
+        }
     }
 }
 

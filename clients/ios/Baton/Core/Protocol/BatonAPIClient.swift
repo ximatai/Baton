@@ -83,7 +83,7 @@ struct BatonAPIClient: Sendable {
     func discover(pairingURL: URL) async throws -> PairingDocument {
         try validateURL(pairingURL)
         let document: PairingDocument = try await get(url: pairingURL)
-        guard document.protocolVersion == "baton/1.1" else { throw CompanionAPIError.invalidResponse }
+        guard ["baton/1.1", "baton/1.2"].contains(document.protocolVersion) else { throw CompanionAPIError.invalidResponse }
         try validateSameOrigin(pairingURL, document.endpoints.join)
         try validateSameOrigin(pairingURL, document.endpoints.approval)
         try validateSameOrigin(pairingURL, document.endpoints.conversation)
@@ -94,7 +94,14 @@ struct BatonAPIClient: Sendable {
         let request: PendingPairingRequest = try await request(
             url: document.endpoints.join,
             method: "POST",
-            body: PairingJoinRequest(deviceID: deviceID, deviceName: deviceName, deviceProof: deviceProof)
+            body: PairingJoinRequest(
+                deviceID: deviceID,
+                deviceName: deviceName,
+                deviceProof: deviceProof,
+                clientCapabilities: document.supportsSelectionCapabilityNegotiation
+                    ? BatonClientCapabilities(selectionInteraction: true)
+                    : nil
+            )
         )
         guard request.pairingID == document.pairingID, !request.requestID.isEmpty else {
             throw CompanionAPIError.invalidResponse
@@ -123,8 +130,30 @@ struct BatonAPIClient: Sendable {
     }
 
     func send(endpoint: URL, token: String, text: String, clientMessageID: UUID) async throws -> ConversationMessage {
-        struct SendBody: Encodable { let clientMessageID: String; let content: [MessageContent]; enum CodingKeys: String, CodingKey { case clientMessageID = "client_message_id", content } }
-        return try await request(url: endpoint.appending(path: "messages"), method: "POST", token: token, body: SendBody(clientMessageID: clientMessageID.uuidString, content: [.text(text)]))
+        try await send(endpoint: endpoint, token: token, content: [.text(text)], clientMessageID: clientMessageID)
+    }
+
+    func sendSelection(endpoint: URL, token: String, interactionID: String, optionID: String, clientMessageID: UUID) async throws -> ConversationMessage {
+        try await send(
+            endpoint: endpoint,
+            token: token,
+            content: [.selectionResponse(SelectionResponse(interactionID: interactionID, optionID: optionID))],
+            clientMessageID: clientMessageID
+        )
+    }
+
+    private func send(endpoint: URL, token: String, content: [MessageContent], clientMessageID: UUID) async throws -> ConversationMessage {
+        struct SendBody: Encodable {
+            let clientMessageID: String
+            let content: [MessageContent]
+            enum CodingKeys: String, CodingKey { case clientMessageID = "client_message_id", content }
+        }
+        return try await request(
+            url: endpoint.appending(path: "messages"),
+            method: "POST",
+            token: token,
+            body: SendBody(clientMessageID: clientMessageID.uuidString, content: content)
+        )
     }
 
     /// Downloads a server-provided image through the same authenticated,
@@ -620,6 +649,7 @@ enum BatonEventType {
         switch type {
         case "conversation.snapshot", "conversation.resync", "conversation.closed",
              "message.created", "message.delta", "message.completed", "message.failed", "message.content.appended",
+             "selection.resolved", "selection.cancelled",
              "run.started", "run.completed", "run.cancelled":
             true
         default:

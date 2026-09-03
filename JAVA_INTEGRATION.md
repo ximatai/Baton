@@ -1,4 +1,4 @@
-# Java Web 接入指南（Baton Companion Profile 1.1）
+# Java Web 接入指南（Baton Companion Profile 1.2）
 
 > **受众：已有 Java Web/Agent 服务的接入维护者。** 这是一份实现指南；完整 wire contract 以 [BATON_SPEC.md](BATON_SPEC.md) 为准，产品介绍见 [README.md](README.md)。
 
@@ -15,7 +15,7 @@ Baton 的本地 Python 服务是协议测试靶场，不是生产后端；Java �
 
 服务器是 Conversation 的唯一事实源。Web 与 Baton 是同一会话的平级客户端，客户端之间不直接传递消息。
 
-## V1.1 capabilities
+## Capabilities
 
 Discovery document 内的 `capabilities` 只是服务端对当前 Conversation
 的能力声明，不是设备协商、也不授予权限。`text: true` 为 V1.1 必填；
@@ -25,6 +25,14 @@ Discovery document 内的 `capabilities` 只是服务端对当前 Conversation
 服务会下发可读取的静态图片内容项，不是上传协商或设备权限。iOS 的本地语音能力
 不需要也不应在 V1.1 回传。未来若要支持 camera/file/approval 等双向能力，
 必须另行定义协商、授权与降级语义，不能把未知字段视为已经协商成功。
+
+V1.2 的 `selection: true` 表示服务可提供受限的单选交互。仅当 discovery 为
+`baton/1.2` 且声明该字段为 `true` 时，Baton 才会在 join body 中声明
+`client_capabilities.selection_interaction: true`；V1.1 和未声明该能力的服务收到的
+join body 保持不变。这是设备渲染能力，不是权限。服务端只可在兼容策略允许时下发
+`selection_required`，否则退化为普通文本问题。`free_text_allowed` 与必答选择都通过现有 messages endpoint 提交
+`selection_response`；服务端必须持久化状态、原子校验第一条有效回答，并以 snapshot
+的 `selection_states` 和 SSE `selection.resolved` / `selection.cancelled` 使重连和多设备一致。
 
 ## 配对与浏览器授权
 

@@ -5,6 +5,7 @@ struct ConversationView: View {
     @FocusState private var isComposerFocused: Bool
     @State private var voiceVerticalDrag: CGFloat = 0
     @State private var isVoiceLongPressActive = false
+    @State private var selectionScrollTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,7 +20,15 @@ struct ConversationView: View {
                 ScrollView {
                     LazyVStack(spacing: 14) {
                         if model.messages.isEmpty { ConversationEmptyState() }
-                        ForEach(model.messages) { message in MessageBubble(message: message, imageLoader: model.imageLoader).id(message.id) }
+                        ForEach(displayedMessages) { message in
+                            MessageBubble(
+                                message: message,
+                                imageLoader: model.imageLoader,
+                                selectionStates: model.selectionStates,
+                                submitSelection: model.select
+                            )
+                            .id(message.id)
+                        }
                     }
                     .frame(maxWidth: 680)
                     .padding(.horizontal, 16)
@@ -30,6 +39,9 @@ struct ConversationView: View {
                 .background(Color(uiColor: .systemGroupedBackground))
                 .onChange(of: model.messages) { _, messages in
                     scrollToLatest(messages, using: proxy)
+                }
+                .onChange(of: model.selectionStates) { _, _ in
+                    scrollToLatestAfterSelectionUpdate(using: proxy)
                 }
                 // Also scroll cached history on the destination's first appearance.
                 .task(id: model.messages.last?.id) {
@@ -59,7 +71,7 @@ struct ConversationView: View {
                     }.padding(.horizontal, 4)
                 }
                 if let message = model.composerUnavailableMessage {
-                    Label(message, systemImage: "wifi.slash")
+                    Label(message, systemImage: model.composerUnavailableSymbolName)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 4)
@@ -167,10 +179,10 @@ struct ConversationView: View {
 
     @ViewBuilder
     private var voiceInputPlaceholder: some View {
-        if let unavailableMessage = model.composerUnavailableMessage {
+        if let unavailableMessage = model.composerUnavailableMessage, !model.isSelectionRequired {
             Text(unavailableMessage)
                 .foregroundStyle(.secondary)
-        } else {
+        } else if !model.isComposerDisabled {
             HStack(spacing: 0) {
                 Text("按住 ")
                     .foregroundStyle(.secondary)
@@ -181,7 +193,45 @@ struct ConversationView: View {
     }
 
     private var composerPlaceholder: String? {
-        model.composerText.isEmpty ? model.composerUnavailableMessage ?? "" : nil
+        model.composerText.isEmpty ? "" : nil
+    }
+
+    private var displayedMessages: [ConversationMessage] {
+        model.messages.filter { !shouldHideResolvedSelectionResponse($0) }
+    }
+
+    private var selectionCardIDs: Set<String> {
+        Set(model.messages
+            .filter { $0.role == .assistant }
+            .flatMap { message in
+                message.content.compactMap { content in
+                    guard case let .selection(selection) = content else { return nil }
+                    return selection.interactionID
+                }
+            })
+    }
+
+    private func shouldHideResolvedSelectionResponse(_ message: ConversationMessage) -> Bool {
+        guard message.role == .user,
+              message.content.count == 1,
+              case let .selectionResponse(response) = message.content[0],
+              selectionCardIDs.contains(response.interactionID),
+              model.selectionStates[response.interactionID]?.status == .answered else {
+            return false
+        }
+        return true
+    }
+
+    private func scrollToLatestAfterSelectionUpdate(using proxy: ScrollViewProxy) {
+        selectionScrollTask?.cancel()
+        let targetID = displayedMessages.last?.id
+        selectionScrollTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled, let targetID else { return }
+            withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(targetID, anchor: .bottom)
+            }
+        }
     }
 
     private var composerBorderColor: Color {

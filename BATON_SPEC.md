@@ -164,7 +164,7 @@ app render a trustworthy pending-connection screen and submit a join request.
 
 ```json
 {
-  "protocol": "baton/1.1",
+  "protocol": "baton/1.2",
   "pairing_id": "ps_7KDX23",
   "expires_at": "2026-08-26T10:31:00Z",
   "service": { "id": "acme-erp", "name": "Acme ERP", "icon_url": "https://agent.example.com/icon.png" },
@@ -175,7 +175,7 @@ app render a trustworthy pending-connection screen and submit a join request.
     "approval": "https://agent.example.com/v1/baton/pairings/ps_7KDX23/approval",
     "conversation": "https://agent.example.com/v1/baton/conversations/conv_01J..."
   },
-  "capabilities": { "text": true, "markdown": true, "streaming": true, "image": true, "content_append": true, "conversation_end": false }
+  "capabilities": { "text": true, "markdown": true, "streaming": true, "image": true, "content_append": true, "conversation_end": false, "selection": true }
 }
 ```
 
@@ -441,6 +441,43 @@ the Conversation.
 contain an `image`; servers add images only in a completed `message.created` or
 the append event below.
 
+### Selection interactions (V1.2)
+
+A completed assistant message may contain one or more immutable `selection`
+items. Each is a single-choice question with an opaque `interaction_id`, a
+plain-text `prompt`, 2–8 unique `{id,label}` options, and an `input_policy` of
+`free_text_allowed` or `selection_required`. A `confirmation` presentation is
+only valid for `selection_required` and exactly the ordered `confirm` and
+`cancel` options. It standardizes UI only: `cancel` never means run cancel,
+Conversation end, deletion, or client-side action.
+
+```json
+{"type":"selection","interaction_id":"sel_01J...","prompt":"确认结束这段对话吗？","input_policy":"selection_required","presentation":"confirmation","options":[{"id":"confirm","label":"确认"},{"id":"cancel","label":"取消"}]}
+```
+
+The user answers through the normal idempotent messages endpoint:
+`{"content":[{"type":"selection_response","interaction_id":"sel_01J...","option_id":"confirm"}]}`.
+The server validates the open interaction and option atomically, persists a
+user message (including the server-derived option `label`), and emits
+`selection.resolved`. It returns `409 selection_resolved` for a losing
+concurrent answer and `409 selection_required` when ordinary text attempts to
+bypass an open required selection. `free_text_allowed` choices also send a
+`selection_response`, but never block ordinary text.
+
+Snapshots include `selection_states`, each containing `interaction_id`,
+`status` (`open`, `answered`, `cancelled`, `superseded`, or `expired`) and, for
+`answered`, `selected_option_id`. `selection.resolved` and
+`selection.cancelled` carry the same state object as persisted SSE envelopes.
+At most one `selection_required` interaction may be open per Conversation.
+
+Only when discovery is exactly `baton/1.2` and declares `selection: true`, the
+join body may declare
+`"client_capabilities":{"selection_interaction":true}`. It is a narrow
+per-device rendering declaration, not authorization. A service must issue a
+required selection only when its compatibility policy proves every affected
+device can complete it; otherwise it falls back to an ordinary text question.
+V1.1 clients and servers remain valid without selection support.
+
 ### Required event envelope
 
 Persisted SSE event ids are strictly increasing per conversation and retained
@@ -460,7 +497,7 @@ shape and standard SSE framing.
 }
 ```
 
-V1.1 event types:
+Defined event types (V1.1 + V1.2):
 
 - `conversation.snapshot` — optional initial snapshot.
 - `message.created` — immutable server-created message.
@@ -473,6 +510,8 @@ V1.1 event types:
   non-completed target, empty/malformed content, or any non-image item requires
   the client to fetch a fresh atomic snapshot. There is no replace, insertion,
   deletion, client-initiated append, upload, file, or video operation.
+- `selection.resolved`, `selection.cancelled` — V1.2 persisted lifecycle
+  changes carrying one complete `selection_states` item.
 - `message.completed` — finalizes a message.
 - `message.failed` — marks a message/run failed with a user-safe error.
 - `run.started`, `run.completed`, `run.cancelled` — controls the stop button.
@@ -491,7 +530,7 @@ and multimodal content.
 
 ## Capabilities
 
-The discovery document's `capabilities` object is the only V1.1 capability
+In V1.1, the discovery document's `capabilities` object is the only capability
 surface. It declares what this server accepts or emits for this Conversation;
 it is not a request for device capabilities and it does not grant permission.
 `text: true` is mandatory. `markdown`, `streaming`, `image`, and `content_append` may be declared
@@ -503,10 +542,18 @@ only when the service permits Baton to invoke End for the shared Conversation.
 A missing or false value means the client must not show an End operation; the
 server still enforces authorization.
 
-Bidirectional capability negotiation, per-device capabilities, and future keys
-such as `camera`, `file`, `approval`, `location`, and `notification` are
-explicitly deferred. A future version must define their lifecycle and fallback
-semantics rather than treating unknown keys as negotiated support.
+V1.2 defines one narrow exception: when discovery is exactly `baton/1.2` and
+declares `selection: true`, Baton may include
+`client_capabilities.selection_interaction: true` in its join body. V1.1
+services, and V1.2 services without that declaration, receive the unchanged
+V1.1 join body. This per-device rendering declaration is not authorization; the
+service applies its compatibility policy before it creates a required
+selection.
+
+All other bidirectional or per-device capabilities, and future keys such as
+`camera`, `file`, `approval`, `location`, and `notification`, remain deferred.
+A future version must define their lifecycle and fallback semantics rather than
+treating unknown keys as negotiated support.
 
 ## Integration acceptance requirements
 

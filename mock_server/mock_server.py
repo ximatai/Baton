@@ -59,6 +59,7 @@ class Store:
         self.condition = threading.Condition(self.lock)
         self.pairings, self.tokens, self.events = {}, {}, []
         self.runs, self.messages, self.next_sequence = {}, [], 1
+        self.selection_states = {}
         self.conversation_closed = False
         self.conversation_epoch = 0
         self.fail_next_completion_for_test = False
@@ -76,6 +77,7 @@ class Store:
         self.fixture_media_enabled = fixture_media
         self.is_review_demo = review_demo
         self.messages, self.runs, self.events, self.next_sequence = [], {}, [], 1
+        self.selection_states = {}
         self.conversation_closed = False
         messages = []
         if welcome:
@@ -143,12 +145,18 @@ class Store:
             pairing["status"] = "expired"
         return pairing, "pairing_expired" if pairing["status"] == "expired" else None
 
-    def new_token(self, device_id, conversation_id):
+    def new_token(self, device_id, conversation_id, client_capabilities=None):
         token = "baton_local_" + secrets.token_urlsafe(18)
         session_id = "ses_" + secrets.token_urlsafe(18)
         self.tokens[token] = {"device_id": device_id, "session_id": session_id,
-                              "conversation_id": conversation_id}
+                              "conversation_id": conversation_id,
+                              "client_capabilities": copy.deepcopy(client_capabilities or {})}
         return token, session_id
+
+    def can_issue_required_selection(self):
+        """A required choice is safe only when every live Baton device can render it."""
+        devices = [record for record in self.tokens.values() if record["conversation_id"] == self.conversation_id]
+        return bool(devices) and all(record["client_capabilities"].get("selection_interaction") is True for record in devices)
 
     def is_current_run(self, run_id, epoch, *, status="active"):
         run = self.runs.get(run_id)
@@ -420,7 +428,8 @@ class Handler(BaseHTTPRequestHandler):
             request_id = "pr_" + secrets.token_urlsafe(18)
             pairing["request"] = {"id": request_id, "device_id": device_id,
                                   "device_name": device_name[:120], "device_proof": device_proof,
-                                  "access_token": None}
+                                  "access_token": None,
+                                  "client_capabilities": body.get("client_capabilities") if isinstance(body.get("client_capabilities"), dict) else {}}
             pairing["status"] = "approved" if pairing["approval_mode"] == "auto" else "pending"
         return self.send_json({"pairing_id": pairing_id, "request_id": request_id, "status": pairing["status"],
             "poll_url": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/requests/{request_id}",
@@ -436,7 +445,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.error(400, "invalid_decision", "decision must be approved or rejected.")
             pairing["status"] = decision
             if decision == "approved":
-                token, session_id = STORE.new_token(pairing["request"]["device_id"], pairing["conversation_id"])
+                token, session_id = STORE.new_token(pairing["request"]["device_id"], pairing["conversation_id"], pairing["request"]["client_capabilities"])
                 pairing["request"]["access_token"] = token
                 pairing["request"]["session_id"] = session_id
         if redirect:
@@ -463,7 +472,7 @@ class Handler(BaseHTTPRequestHandler):
             # Mark the invitation consumed on first successful claim, but return the
             # exact same token for retried claims made by the proving device until expiry.
             if pairing["status"] == "approved" and request["access_token"] is None:
-                token, session_id = STORE.new_token(request["device_id"], pairing["conversation_id"])
+                token, session_id = STORE.new_token(request["device_id"], pairing["conversation_id"], request["client_capabilities"])
                 request["access_token"] = token
                 request["session_id"] = session_id
             pairing["status"] = "consumed"
@@ -586,20 +595,53 @@ create();
     def submit_message(self, body):
         """Shared message path for the mobile API and fixture-only Web client."""
         client_id = body.get("client_message_id")
-        text = ((body.get("content") or [{}])[0].get("text") if isinstance(body.get("content"), list) else body.get("text"))
+        content = body.get("content") if isinstance(body.get("content"), list) else []
+        first = content[0] if content else {}
+        text = first.get("text") if first.get("type") == "text" else body.get("text")
         try:
             valid_client_id = isinstance(client_id, str) and str(uuid.UUID(client_id)) == client_id.lower()
         except (ValueError, AttributeError):
             valid_client_id = False
-        if not valid_client_id or not isinstance(text, str) or not text.strip():
-            return self.error(400, "invalid_message", "client_message_id and text content are required.")
+        if not valid_client_id:
+            return self.error(400, "invalid_message", "client_message_id is required.")
         with STORE.condition:
             if STORE.conversation_closed:
                 return self.error(410, "conversation_closed", "Conversation has ended.")
             for message in STORE.messages:
                 if message.get("client_message_id") == client_id: return self.send_json(message)
+            if first.get("type") == "selection_response":
+                interaction_id, option_id = first.get("interaction_id"), first.get("option_id")
+                state = STORE.selection_states.get(interaction_id)
+                selection = next((part for message in STORE.messages for part in message["content"]
+                                  if part.get("type") == "selection" and part.get("interaction_id") == interaction_id), None)
+                options = selection.get("options", []) if selection else []
+                option = next((item for item in options if item.get("id") == option_id), None)
+                if not state or state["status"] != "open":
+                    return self.error(409, "selection_resolved", "This selection has already been resolved.")
+                if not option:
+                    return self.error(400, "invalid_selection", "The selected option is not valid.")
+                response = {"type": "selection_response", "interaction_id": interaction_id,
+                            "option_id": option_id, "label": option["label"]}
+                message = STORE.add_message("msg_" + uuid.uuid4().hex[:16], client_id, "user", content=[response])
+                state = {"interaction_id": interaction_id, "status": "answered", "selected_option_id": option_id}
+                STORE.selection_states[interaction_id] = state
+                STORE.event("message.created", message)
+                STORE.event("selection.resolved", state)
+                return self.send_json(message, 201)
+            if not isinstance(text, str) or not text.strip():
+                return self.error(400, "invalid_message", "text or selection_response content is required.")
+            if any(state["status"] == "open" and state.get("input_policy") == "selection_required"
+                   for state in STORE.selection_states.values()):
+                return self.error(409, "selection_required", "Complete the required selection before sending text.")
             message = STORE.add_message("msg_" + uuid.uuid4().hex[:16], client_id, "user", text)
             STORE.event("message.created", message)
+            selection = self.fixture_selection_for(text)
+            if selection:
+                assistant = STORE.add_message("msg_" + uuid.uuid4().hex[:16], None, "assistant", content=[selection])
+                STORE.selection_states[selection["interaction_id"]] = {
+                    "interaction_id": selection["interaction_id"], "status": "open", "input_policy": selection["input_policy"]}
+                STORE.event("message.created", assistant)
+                return self.send_json(message, 201)
             run_id = "run_" + uuid.uuid4().hex[:12]
             assistant = STORE.add_message("msg_" + uuid.uuid4().hex[:16], None, "assistant", "", status="streaming")
             STORE.runs[run_id] = {"status": "active", "message_id": assistant["id"],
@@ -611,6 +653,23 @@ create();
         threading.Thread(target=self.stream_reply, args=(run_id, text, epoch), daemon=True).start()
         return self.send_json(message, 201)
 
+    def fixture_selection_for(self, text):
+        """Small deterministic UI hook; real services create these from Agent state."""
+        normalized = text.strip().lower()
+        if normalized in {"选择", "selection"}:
+            return {"type": "selection", "interaction_id": "sel_" + uuid.uuid4().hex[:16],
+                    "prompt": "你想继续做什么？", "input_policy": "free_text_allowed",
+                    "presentation": "standard", "options": [
+                        {"id": "summary", "label": "总结当前结论"}, {"id": "next", "label": "给出下一步计划"}]}
+        if normalized in {"确认", "confirm"}:
+            if not STORE.can_issue_required_selection():
+                return None
+            return {"type": "selection", "interaction_id": "sel_" + uuid.uuid4().hex[:16],
+                    "prompt": "确认继续这个操作吗？", "input_policy": "selection_required",
+                    "presentation": "confirmation", "options": [
+                        {"id": "confirm", "label": "确认"}, {"id": "cancel", "label": "取消"}]}
+        return None
+
     def conversation_snapshot(self):
         with STORE.lock:
             if STORE.conversation_closed: return self.error(410, "conversation_closed", "Conversation has ended.")
@@ -621,6 +680,9 @@ create();
             ]
             return self.send_json({"id": STORE.conversation_id, "title": STORE.conversation_title, "agent_name": "Mock Agent",
                                    "messages": list(reversed(STORE.messages)),
+                                   "selection_states": [
+                                       {key: value for key, value in state.items() if key != "input_policy"}
+                                       for state in STORE.selection_states.values()],
                                    "event_cursor": STORE.event_cursor(), "active_runs": active_runs})
 
     def do_POST(self):
@@ -778,7 +840,7 @@ create();
             with STORE.lock:
                 pairing = self.active_pairing(pairing_id)
                 if not pairing: return
-            return self.send_json({"protocol": "baton/1.1", "pairing_id": pairing_id,
+            return self.send_json({"protocol": "baton/1.2", "pairing_id": pairing_id,
                 "expires_at": datetime.fromtimestamp(pairing["expires_at"], timezone.utc).isoformat().replace("+00:00", "Z"),
                 "service": {"id": "local-mock", "name": pairing["service_name"]},
                 "conversation": {"id": pairing["conversation_id"], "title": pairing["conversation_title"], "agent_name": "Mock Agent"},
@@ -786,7 +848,7 @@ create();
                 "endpoints": {"join": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/requests",
                               "approval": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/approval",
                               "conversation": f"{STORE.base_url}/v1/baton/conversations/{STORE.conversation_id}"},
-                "capabilities": {"text": True, "markdown": True, "streaming": True, "image": True, "content_append": True, "conversation_end": True}})
+                "capabilities": {"text": True, "markdown": True, "streaming": True, "image": True, "content_append": True, "conversation_end": True, "selection": True}})
         if path.startswith(pairing_prefix) and path.endswith("/approval"):
             return self.approval_page(path[len(pairing_prefix):-len("/approval")].strip("/"))
         if path.startswith(pairing_prefix) and path.endswith("/qr"):
