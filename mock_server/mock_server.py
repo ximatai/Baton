@@ -381,6 +381,11 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(review_demo, bool):
             return self.error(400, "invalid_review_demo", "review_demo must be a boolean.")
         review_instance_id = body.get("review_instance_id")
+        # An already-open review page may still run the preceding JavaScript
+        # while this fixture is restarted. Give that legacy request its own
+        # one-off instance instead of breaking the current QR flow.
+        if review_demo and review_instance_id is None:
+            review_instance_id = "legacy_" + secrets.token_urlsafe(18)
         if review_demo and (not isinstance(review_instance_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", review_instance_id)):
             return self.error(400, "invalid_review_instance", "review_instance_id must be a page-local identifier.")
         with STORE.lock:
