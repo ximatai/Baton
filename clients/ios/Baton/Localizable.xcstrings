@@ -1,6 +1,9 @@
 {
   "sourceLanguage" : "zh-Hans",
   "strings" : {
+    "" : {
+
+    },
     "%@，图片无法加载" : {
       "localizations" : {
         "en" : {
@@ -158,6 +161,9 @@
         }
       }
     },
+    "仅修改该对话在这台 iPhone 上的展示名称。" : {
+
+    },
     "会话已不可用" : {
       "localizations" : {
         "en" : {
@@ -255,6 +261,9 @@
           }
         }
       }
+    },
+    "保存" : {
+
     },
     "停止生成" : {
       "localizations" : {
@@ -356,6 +365,9 @@
         }
       }
     },
+    "取消置顶" : {
+
+    },
     "可用" : {
       "localizations" : {
         "en" : {
@@ -378,6 +390,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Image"
+          }
+        }
+      }
+    },
+    "图片 %lld / %lld" : {
+      "localizations" : {
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "new",
+            "value" : "图片 %1$lld / %2$lld"
           }
         }
       }
@@ -498,6 +520,9 @@
         }
       }
     },
+    "对话名称" : {
+
+    },
     "对话已结束" : {
       "localizations" : {
         "en" : {
@@ -547,6 +572,7 @@
       }
     },
     "已仅从本机断开" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -595,6 +621,9 @@
         }
       }
     },
+    "已完成选择" : {
+
+    },
     "已暂停" : {
       "localizations" : {
         "en" : {
@@ -626,6 +655,9 @@
           }
         }
       }
+    },
+    "已选择：%@" : {
+
     },
     "开始语音输入" : {
       "localizations" : {
@@ -723,6 +755,9 @@
           }
         }
       }
+    },
+    "当前离线，暂不能发送消息" : {
+
     },
     "当前语言（%@）没有可用的本地语音模型。" : {
       "localizations" : {
@@ -906,6 +941,12 @@
         }
       }
     },
+    "按住 " : {
+
+    },
+    "操作未完成" : {
+
+    },
     "断开" : {
       "localizations" : {
         "en" : {
@@ -922,8 +963,10 @@
         }
       }
     },
+    "断开本机访问" : {
+
+    },
     "断开本机访问？" : {
-      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -954,6 +997,9 @@
           }
         }
       }
+    },
+    "无法加入对话" : {
+
     },
     "无法安全保存本次会话（Keychain 错误）。" : {
       "localizations" : {
@@ -1018,6 +1064,9 @@
           }
         }
       }
+    },
+    "有更新" : {
+
     },
     "服务地址必须是完整的 HTTP 或 HTTPS URL。" : {
       "localizations" : {
@@ -1116,6 +1165,7 @@
       }
     },
     "未能通知服务端，已仅从本机断开；远端会话可能仍有效。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1132,6 +1182,7 @@
       }
     },
     "未能通知服务端；远端会话可能仍有效。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1164,7 +1215,14 @@
         }
       }
     },
+    "本地会话清理失败" : {
+
+    },
+    "松开取消本次听写" : {
+
+    },
     "检查" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1297,6 +1355,9 @@
         }
       }
     },
+    "正在听写，上滑取消，松开转写" : {
+
+    },
     "正在听写，松开即可转写（音频不会离开此设备）" : {
       "localizations" : {
         "en" : {
@@ -1346,6 +1407,7 @@
       }
     },
     "正在撤销服务器会话…" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1425,6 +1487,9 @@
         }
       }
     },
+    "正在连接，暂不能发送消息" : {
+
+    },
     "正在连接服务" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1474,6 +1539,9 @@
           }
         }
       }
+    },
+    "此对话已不可用" : {
+
     },
     "此服务已为当前二维码开启自动批准。会话凭据仍只会在服务端签发后保存。" : {
       "localizations" : {
@@ -1540,6 +1608,18 @@
         }
       }
     },
+    "此选择已取消" : {
+
+    },
+    "此选择已更新" : {
+
+    },
+    "此选择已结束" : {
+
+    },
+    "此选择已过期" : {
+
+    },
     "此麦克风的音频格式不支持本地语音转文字。" : {
       "localizations" : {
         "en" : {
@@ -1557,6 +1637,7 @@
       }
     },
     "消息已安全暂存，将在下次连接时以原始请求重试。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1573,6 +1654,7 @@
       }
     },
     "消息未能安全暂存，请重新输入。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1597,6 +1679,9 @@
           }
         }
       }
+    },
+    "点按后立即发送" : {
+
     },
     "点按查看连接风险说明" : {
       "localizations" : {
@@ -1730,6 +1815,7 @@
       }
     },
     "结束" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1843,6 +1929,9 @@
         }
       }
     },
+    "置顶" : {
+
+    },
     "让网页显示 Baton 二维码。" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1907,6 +1996,9 @@
           }
         }
       }
+    },
+    "请先完成选择" : {
+
     },
     "请只扫描可信网页提供的二维码。若服务使用未加密连接，进入对话后会明确提示。" : {
       "extractionState" : "stale",
@@ -1974,6 +2066,12 @@
         }
       }
     },
+    "转文字" : {
+
+    },
+    "轻点输入文字；长按开始本地语音转文字，上滑取消，松开后可编辑转写结果" : {
+
+    },
     "输入文字，或使用麦克风在本地转写后发送。" : {
       "localizations" : {
         "en" : {
@@ -1991,6 +2089,7 @@
       }
     },
     "输入消息" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -2104,6 +2203,12 @@
         }
       }
     },
+    "重命名对话" : {
+
+    },
+    "重新扫描" : {
+
+    },
     "重新连接" : {
       "localizations" : {
         "en" : {
@@ -2153,6 +2258,7 @@
       }
     },
     "长按开始本地语音输入，松开后可编辑转写结果" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

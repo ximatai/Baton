@@ -1,12 +1,52 @@
 {
   "fill" : {
-    "solid" : "display-p3:0.07605,0.11095,0.18632,1.00000"
+    "solid" : "display-p3:0.00549,0.07117,0.18632,1.00000"
   },
   "groups" : [
     {
       "layers" : [
         {
           "glass" : false,
+          "hidden" : true,
+          "image-name" : "3691e483-8981-48e5-a711-39c2aae51285.png",
+          "name" : "3691e483-8981-48e5-a711-39c2aae51285",
+          "position" : {
+            "scale" : 0.75,
+            "translation-in-points" : [
+              12.75,
+              7.875
+            ]
+          }
+        },
+        {
+          "glass" : false,
+          "hidden" : true,
+          "image-name" : "8e8e97f4-fddf-406d-b1dd-4f5607fb7a9f.png",
+          "name" : "8e8e97f4-fddf-406d-b1dd-4f5607fb7a9f",
+          "position" : {
+            "scale" : 0.57,
+            "translation-in-points" : [
+              14.28642890598394,
+              -1.7100000000000364
+            ]
+          }
+        },
+        {
+          "glass" : false,
+          "hidden" : false,
+          "image-name" : "232a00a2-18a5-46bb-8c1e-3200e61302a3.png",
+          "name" : "232a00a2-18a5-46bb-8c1e-3200e61302a3",
+          "position" : {
+            "scale" : 0.58,
+            "translation-in-points" : [
+              11.269125404288388,
+              -3.769999999999982
+            ]
+          }
+        },
+        {
+          "glass" : false,
+          "hidden" : true,
           "image-name" : "0ea3c13b-880a-4f73-837a-dc860d0a07fd 2.png",
           "name" : "0ea3c13b-880a-4f73-837a-dc860d0a07fd 2",
           "position" : {
