@@ -39,13 +39,14 @@ def create_pairing(payload=None):
 if REVIEW_DEMO_TOKEN:
     # A stable review URL is not itself a pairing credential. It creates a
     # normal, short-lived, auto-approved invitation for a single scanner.
+    review_instance = "review_smoke_instance_" + uuid.uuid4().hex
     status, page = request(f"/review/{REVIEW_DEMO_TOKEN}", expect_json=False)
     assert status == 200 and "App Review Demo" in page
     assert REVIEW_DEMO_TOKEN not in page
     action_match = re.search(r'reviewAction=("[^"]+")', page)
     assert action_match
     review_action = json.loads(action_match.group(1))
-    status, review_pair = request(f"/review/{REVIEW_DEMO_TOKEN}/pairing", "POST", {})
+    status, review_pair = request(f"/review/{REVIEW_DEMO_TOKEN}/pairing", "POST", {"review_instance_id": review_instance})
     assert status == 200 and review_pair["approval_mode"] == "auto"
     assert review_pair["expires_at"].endswith("Z")
     status, review_discovery = request("/.well-known/baton/pair/" + review_pair["pairing_id"])
@@ -53,12 +54,18 @@ if REVIEW_DEMO_TOKEN:
     assert review_discovery["service"]["name"] == "Baton Review Demo"
     assert review_discovery["conversation"]["title"] == "Today’s task plan"
     review_conversation_id = review_discovery["conversation"]["id"]
-    status, next_review_pair = request(f"/review/{REVIEW_DEMO_TOKEN}/pairing", "POST", {})
+    status, next_review_pair = request(f"/review/{REVIEW_DEMO_TOKEN}/pairing", "POST", {"review_instance_id": review_instance})
     assert status == 200 and next_review_pair["pairing_id"] != review_pair["pairing_id"]
     status, _ = request("/.well-known/baton/pair/" + review_pair["pairing_id"])
     assert status == 410
     status, next_review_discovery = request("/.well-known/baton/pair/" + next_review_pair["pairing_id"])
     assert status == 200 and next_review_discovery["conversation"]["id"] == review_conversation_id
+    # A second browser tab must not invalidate the first tab's live QR.
+    other_review_instance = "review_smoke_other_" + uuid.uuid4().hex
+    status, other_review_pair = request(f"/review/{REVIEW_DEMO_TOKEN}/pairing", "POST", {"review_instance_id": other_review_instance})
+    assert status == 200 and other_review_pair["pairing_id"] != next_review_pair["pairing_id"]
+    status, _ = request("/.well-known/baton/pair/" + next_review_pair["pairing_id"])
+    assert status == 200
     review_proof = "review_proof_" + uuid.uuid4().hex + uuid.uuid4().hex
     status, review_join = request("/v1/baton/pairings/" + next_review_pair["pairing_id"] + "/requests", "POST",
                                   {"device_id": "review-smoke", "device_name": "Review Smoke", "device_proof": review_proof})
@@ -67,7 +74,7 @@ if REVIEW_DEMO_TOKEN:
     assert status == 200 and review_pair_status["status"] == "approved"
     # The review page may immediately show the next QR after a scan. That
     # must not revoke the scanned device before it claims its proof-bound token.
-    status, post_scan_pair = request(f"/review/{REVIEW_DEMO_TOKEN}/pairing", "POST", {})
+    status, post_scan_pair = request(f"/review/{REVIEW_DEMO_TOKEN}/pairing", "POST", {"review_instance_id": review_instance})
     assert status == 200 and post_scan_pair["pairing_id"] != next_review_pair["pairing_id"]
     status, scanned_discovery = request("/.well-known/baton/pair/" + next_review_pair["pairing_id"])
     assert status == 200 and scanned_discovery["conversation"]["id"] == review_conversation_id
@@ -78,7 +85,7 @@ if REVIEW_DEMO_TOKEN:
     assert status == 403 and forbidden_end["error"]["code"] == "review_action_forbidden"
     status, ended_review = request("/conversation:end", "POST", {}, extra_headers={"X-Baton-Review-Action": review_action})
     assert status == 200 and ended_review["status"] == "ended"
-    status, after_end_pair = request(f"/review/{REVIEW_DEMO_TOKEN}/pairing", "POST", {})
+    status, after_end_pair = request(f"/review/{REVIEW_DEMO_TOKEN}/pairing", "POST", {"review_instance_id": review_instance})
     assert status == 200
     status, after_end_discovery = request("/.well-known/baton/pair/" + after_end_pair["pairing_id"])
     assert status == 200 and after_end_discovery["conversation"]["id"] != review_conversation_id

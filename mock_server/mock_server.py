@@ -6,6 +6,7 @@ import argparse
 import copy
 import html
 import json
+import re
 import secrets
 import threading
 import time
@@ -379,13 +380,18 @@ class Handler(BaseHTTPRequestHandler):
         review_demo = body.get("review_demo", False)
         if not isinstance(review_demo, bool):
             return self.error(400, "invalid_review_demo", "review_demo must be a boolean.")
+        review_instance_id = body.get("review_instance_id")
+        if review_demo and (not isinstance(review_instance_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", review_instance_id)):
+            return self.error(400, "invalid_review_instance", "review_instance_id must be a page-local identifier.")
         with STORE.lock:
             if review_demo:
-                # A fresh QR supersedes only unscanned invitations. Once a
-                # device has scanned, its auto-approved request must remain
-                # claimable while the page displays the next single-use QR.
+                # A fresh QR supersedes only an unscanned invitation created
+                # by this browser page. Separate review tabs must not expire
+                # each other's code and start an endless refresh loop.
                 for existing in STORE.pairings.values():
-                    if existing.get("review_demo") and existing["status"] == "created":
+                    if (existing.get("review_demo")
+                            and existing.get("review_instance_id") == review_instance_id
+                            and existing["status"] == "created"):
                         existing["status"] = "expired"
                 if STORE.conversation_closed or not STORE.is_review_demo:
                     STORE.reset_conversation("Today’s task plan", welcome=False, fixture_media=False, review_demo=True)
@@ -404,6 +410,7 @@ class Handler(BaseHTTPRequestHandler):
             STORE.pairings[pairing_id] = {"expires_at": expires_at, "status": "created", "request": None,
                                           "conversation_id": STORE.conversation_id, "approval_mode": approval_mode,
                                           "review_demo": review_demo,
+                                          "review_instance_id": review_instance_id,
                                           "service_name": "Baton Review Demo" if review_demo else "Local Baton Mock",
                                           "conversation_title": "Today’s task plan" if review_demo else "Local test conversation"}
         if CHAT_COMPLETER:
@@ -529,9 +536,9 @@ class Handler(BaseHTTPRequestHandler):
 </style>
 <main><header class="hero"><div class="eyebrow">Baton · App Review Demo</div><h1>One conversation, two screens.</h1><p>Scan at left with Baton; follow the same live conversation at right. A fresh QR keeps this conversation. Ending it disconnects every device and starts a clean demo.</p></header><div class="layout"><section class="card pair"><div class="eyebrow">Pair a device</div><h2>Scan to join</h2><img class="qr" id="qr" alt="Short-lived Baton review pairing QR code"><p class="status" id="status">Creating a secure review QR…</p><p class="hint" id="hint"></p><div class="actions"><button class="button primary" id="new">Generate a fresh QR</button><button class="button danger" id="end">End and reset demo</button></div></section><section class="card chat"><div class="chat-head"><div><div class="eyebrow">Shared conversation</div><div class="chat-title">Today’s task plan</div></div><div class="online" id="chat-status">Connecting…</div></div><div class="messages" id="messages"></div><form class="composer" id="composer"><input id="text" autocomplete="off" placeholder="Send a message from the web"><button class="button primary">Send</button></form></section></div></main>
 <script>
-let expiresAt=0,timer=null,pairingTimer=null,pairingID=null,creating=false,createQueued=false,stream=null,ended=false;const $=id=>document.getElementById(id),messages=new Map(),pairingEndpoint=location.pathname==='/'?'/pairing':location.pathname+'/pairing',reviewAction=__REVIEW_ACTION_TOKEN__;
+let expiresAt=0,timer=null,pairingTimer=null,pairingID=null,creating=false,createQueued=false,stream=null,ended=false;const $=id=>document.getElementById(id),messages=new Map(),pairingEndpoint=location.pathname==='/'?'/pairing':location.pathname+'/pairing',reviewAction=__REVIEW_ACTION_TOKEN__;function pageInstanceID(){const key='baton-review-instance';try{let value=sessionStorage.getItem(key);if(value)return value;value=messageID();sessionStorage.setItem(key,value);return value}catch{return messageID()}}const reviewInstanceID=pageInstanceID();
 function show(text,hint=''){$('status').textContent=text;$('hint').textContent=hint}function render(){const list=$('messages');list.replaceChildren();if(!messages.size){const empty=document.createElement('div');empty.className='message empty';empty.textContent='Start the shared conversation from Baton or the web.';list.append(empty)}for(const message of messages.values()){const item=document.createElement('div');item.className='message '+(message.role==='user'?'user':'assistant');item.textContent=(message.content||[]).map(part=>part.text||'').join('')||(message.status==='streaming'?'Thinking…':'');list.append(item)}list.scrollTop=list.scrollHeight}function put(message){if(message&&message.id){messages.set(message.id,message);render()}}function update(id,fn){const message=messages.get(id)||{id,role:'assistant',content:[{type:'text',text:''}],status:'streaming'};fn(message);messages.set(id,message);render()}
-async function create(){if(creating){createQueued=true;return}creating=true;clearInterval(timer);clearInterval(pairingTimer);pairingTimer=null;pairingID=null;show('Creating a secure review QR…');try{const response=await fetch(pairingEndpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});if(!response.ok){show('Could not create the review QR.','Please reload this page.');return}const pairing=await response.json();pairingID=pairing.pairing_id;$('qr').src='/v1/baton/pairings/'+pairingID+'/qr.png';expiresAt=Date.parse(pairing.expires_at);tick();timer=setInterval(tick,1000);pairingTimer=setInterval(checkPairing,1000)}catch{show('Could not create the review QR.','Please reload this page.')}finally{creating=false;if(createQueued){createQueued=false;create()}}}async function checkPairing(){if(!pairingID)return;try{const response=await fetch('/v1/baton/pairings/'+pairingID+'/mock-status');if(response.status===404||response.status===410){await create();return}if(!response.ok)return;const pairing=await response.json();if(pairing.status==='created')return;clearInterval(pairingTimer);pairingTimer=null;show('A device joined. Generating a fresh QR…','The connected device remains in this conversation.');await create()}catch{/* The current QR remains usable if this observer request fails. */}}function tick(){const seconds=Math.max(0,Math.ceil((expiresAt-Date.now())/1000));if(!seconds){clearInterval(timer);create();return}show('Ready to scan.','This QR expires in '+seconds+' seconds and is valid for one device.')}
+async function create(){if(creating){createQueued=true;return}creating=true;clearInterval(timer);clearInterval(pairingTimer);pairingTimer=null;pairingID=null;show('Creating a secure review QR…');try{const response=await fetch(pairingEndpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_instance_id:reviewInstanceID})});if(!response.ok){show('Could not create the review QR.','Please reload this page.');return}const pairing=await response.json();pairingID=pairing.pairing_id;$('qr').src='/v1/baton/pairings/'+pairingID+'/qr.png';expiresAt=Date.parse(pairing.expires_at);tick();timer=setInterval(tick,1000);pairingTimer=setInterval(checkPairing,1000)}catch{show('Could not create the review QR.','Please reload this page.')}finally{creating=false;if(createQueued){createQueued=false;create()}}}async function checkPairing(){if(!pairingID)return;try{const response=await fetch('/v1/baton/pairings/'+pairingID+'/mock-status');if(!response.ok)return;const pairing=await response.json();if(pairing.status==='created')return;clearInterval(pairingTimer);pairingTimer=null;show('A device joined. Generating a fresh QR…','The connected device remains in this conversation.');await create()}catch{/* The current QR remains usable if this observer request fails. */}}function tick(){const seconds=Math.max(0,Math.ceil((expiresAt-Date.now())/1000));if(!seconds){clearInterval(timer);create();return}show('Ready to scan.','This QR expires in '+seconds+' seconds and is valid for one device.')}
 async function load(){const response=await fetch('/v1/baton/mock/web/conversation');if(!response.ok)throw Error();const snapshot=await response.json();messages.clear();snapshot.messages.slice().reverse().forEach(put);$('chat-status').textContent='Live · Baton Review Demo'}function subscribe(){if(stream)stream.close();stream=new EventSource('/v1/baton/mock/web/events');stream.onopen=()=>{$('chat-status').textContent='Live · Baton Review Demo'};stream.addEventListener('message.created',e=>put(JSON.parse(e.data).data));stream.addEventListener('message.delta',e=>{const d=JSON.parse(e.data).data;update(d.message_id,m=>{m.content=m.content||[{type:'text',text:''}];m.content[0].text=(m.content[0].text||'')+d.delta;m.status='streaming'})});stream.addEventListener('message.completed',e=>update(JSON.parse(e.data).data.message_id,m=>m.status='completed'));stream.addEventListener('conversation.closed',()=>{$('chat-status').textContent='Conversation ended';ended=true;$('text').disabled=true})}
 function messageID(){if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.floor(Math.random()*16),v=c==='x'?r:(r&3)|8;return v.toString(16)})}$('composer').onsubmit=async e=>{e.preventDefault();const input=$('text'),text=input.value.trim();if(!text||ended)return;input.disabled=true;try{const r=await fetch('/v1/baton/mock/web/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_message_id:messageID(),content:[{type:'text',text}]})});if(!r.ok)throw Error();input.value='';$('chat-status').textContent='Sending…';await load()}catch{$('chat-status').textContent='Send failed — retry.'}finally{input.disabled=false;input.focus()}};$('new').onclick=create;$('end').onclick=async()=>{if(!confirm('End this demo conversation? Connected Baton devices will be disconnected.'))return;$('end').disabled=true;$('new').disabled=true;const r=await fetch('/conversation:end',{method:'POST',headers:{'Content-Type':'application/json','X-Baton-Review-Action':reviewAction},body:'{}'});if(!r.ok){$('chat-status').textContent='Could not end conversation.';$('end').disabled=false;$('new').disabled=false;return}ended=false;$('text').disabled=false;messages.clear();render();await create();subscribe();await load();$('end').disabled=false;$('new').disabled=false};render();subscribe();load().catch(()=>{$('chat-status').textContent='Could not load conversation.'});create();
 </script>'''
@@ -695,8 +702,14 @@ create();
             return self.send_json({"status": "ended" if ended else "already_ended"})
         if REVIEW_DEMO_TOKEN and path == f"/review/{REVIEW_DEMO_TOKEN}/pairing":
             # This route is separate from normal pairing, which stays manual by default.
+            try:
+                review_body = json.loads(raw or b"{}")
+            except (ValueError, TypeError):
+                return self.error(400, "invalid_json", "Invalid JSON.")
+            if not isinstance(review_body, dict):
+                return self.error(400, "invalid_json", "JSON object required.")
             return self.create_pairing({"approval_mode": "auto", "mock_ttl_seconds": REVIEW_DEMO_TTL_SECONDS,
-                                        "review_demo": True})
+                                        "review_demo": True, "review_instance_id": review_body.get("review_instance_id")})
         if path.startswith("/review/"):
             return self.error(404, "not_found", "Not found.")
         prefix = "/v1/baton/pairings/"
