@@ -341,6 +341,8 @@ final class BatonImageLoader: ObservableObject {
             return image
         }
 
+        // A corrupt/stale local rendition is not terminal. Fall through to an
+        // authenticated fetch; the loader never retains a failure cache.
         if let task = inFlight[content.mediaID] {
             return try await task.value
         }

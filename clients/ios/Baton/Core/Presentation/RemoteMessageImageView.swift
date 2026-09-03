@@ -14,6 +14,19 @@ struct RemoteMessageImageView: View {
     @State private var isPreviewPresented = false
     @State private var retryID = 0
 
+    /// A conversation can be popped and reopened with the same immutable
+    /// `media_id` but a fresh, authenticated loader. Keep the task tied to
+    /// that loader too: otherwise SwiftUI may retain a prior failed
+    /// task state and never ask the new loader for its disk copy or network
+    /// retry.
+    private var loadRequestID: ImageLoadRequestID {
+        ImageLoadRequestID(
+            mediaID: content.mediaID,
+            retryID: retryID,
+            loaderID: loader.map(ObjectIdentifier.init)
+        )
+    }
+
     init(
         content: MessageImage,
         loader: BatonImageLoader?,
@@ -55,8 +68,14 @@ struct RemoteMessageImageView: View {
                 .accessibilityLabel("正在加载：\(content.alt)")
             }
         }
-        .task(id: "\(content.url.absoluteString)#\(retryID)") {
-            guard let loader else { return }
+        .task(id: loadRequestID) {
+            guard let loader else {
+                image = nil
+                failed = true
+                return
+            }
+            image = nil
+            failed = false
             do {
                 image = try await loader.image(for: content)
                 failed = false
@@ -119,6 +138,14 @@ private struct ImagePreviewPage: View {
     @State private var scale = 1.0
     @State private var lastScale = 1.0
 
+    private var loadRequestID: ImageLoadRequestID {
+        ImageLoadRequestID(
+            mediaID: content.mediaID,
+            retryID: 0,
+            loaderID: loader.map(ObjectIdentifier.init)
+        )
+    }
+
     var body: some View {
         GeometryReader { proxy in
             if let image {
@@ -144,8 +171,14 @@ private struct ImagePreviewPage: View {
             }
         }
         .background(.black)
-        .task(id: content.url.absoluteString) {
-            guard let loader else { return }
+        .task(id: loadRequestID) {
+            guard let loader else {
+                image = nil
+                failed = true
+                return
+            }
+            image = nil
+            failed = false
             do {
                 image = try await loader.image(for: content)
                 failed = false
@@ -154,4 +187,10 @@ private struct ImagePreviewPage: View {
             }
         }
     }
+}
+
+private struct ImageLoadRequestID: Hashable {
+    let mediaID: String
+    let retryID: Int
+    let loaderID: ObjectIdentifier?
 }

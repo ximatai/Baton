@@ -101,6 +101,10 @@ final class BatonViewModel: ObservableObject {
     private var draftMessageID: UUID?
     private var mediaPrefetchTask: Task<Void, Never>?
     private var cacheRestoreTask: Task<Void, Never>?
+    /// A replica lease belongs to the active device session. Recreating this
+    /// store for every snapshot would invalidate the media loader's lease and
+    /// turn its persistent image cache into a permanent miss.
+    private var activeConversationStore: ConversationLocalStore?
     /// Retained until this End operation reaches a terminal local outcome, so
     /// an explicit retry after a lost response remains server-idempotent.
     private var endIdempotencyKey: UUID?
@@ -326,7 +330,9 @@ final class BatonViewModel: ObservableObject {
         streamTask?.cancel(); streamTask = nil
         mediaPrefetchTask?.cancel(); mediaPrefetchTask = nil
         cacheRestoreTask?.cancel(); cacheRestoreTask = nil
-        imageLoader?.invalidate()
+        // Returning to the list is not a credential boundary. Preserve the
+        // selected session's decoded media so reopening the same conversation
+        // cannot inherit a cancelled load as a visible failure.
         activeRunID = nil
         agentActivity = .idle
         isBusy = false
@@ -652,7 +658,7 @@ final class BatonViewModel: ObservableObject {
             errorMessage = persistenceError
             return false
         }
-        credential = nil; conversation = nil; messages = []; reducer = ConversationEventReducer(); imageLoader = nil
+        credential = nil; conversation = nil; messages = []; reducer = ConversationEventReducer(); imageLoader = nil; activeConversationStore = nil
         isSendingMessage = false
         draftMessageText = nil; draftMessageID = nil
         activeRunID = nil; agentActivity = .idle; isConnected = false; isBusy = false; connectionStatus = String(localized: "尚未连接"); errorMessage = persistenceError
@@ -841,10 +847,10 @@ final class BatonViewModel: ObservableObject {
     }
 
     private func persistActiveConversation() {
-        guard let credential,
+        guard credential != nil,
               let conversation,
-              let cursor = reducer.cursor else { return }
-        let store = ConversationLocalStore(credential: credential)
+              let cursor = reducer.cursor,
+              let store = activeConversationStore else { return }
         let currentMessages = messages
         Task.detached(priority: .utility) {
             try? store.saveSnapshot(conversation: conversation, messages: currentMessages, cursor: cursor)
@@ -909,7 +915,8 @@ final class BatonViewModel: ObservableObject {
         streamTask?.cancel(); streamTask = nil
         mediaPrefetchTask?.cancel(); mediaPrefetchTask = nil
         cacheRestoreTask?.cancel(); cacheRestoreTask = nil
-        imageLoader?.invalidate()
+        let reopensActiveSession = credential == selectedCredential
+        if !reopensActiveSession { imageLoader?.invalidate() }
         acceptsSpeechTranscript = false
         speechInput.discardTranscript()
         composerText = ""
@@ -919,9 +926,15 @@ final class BatonViewModel: ObservableObject {
         conversation = selectedCredential.conversation
         credential = selectedCredential
         isSendingMessage = false
-        let localStore = ConversationLocalStore(credential: selectedCredential)
-        imageLoader = BatonImageLoader(endpoint: selectedCredential.conversationEndpoint, token: selectedCredential.accessToken, localStore: localStore) { [weak self] in
-            self?.discardTerminatedActiveSession(detail: String(localized: "媒体访问凭据已失效，请重新连接。"), matching: selectedCredential)
+        let localStore: ConversationLocalStore
+        if reopensActiveSession, let activeConversationStore, imageLoader != nil {
+            localStore = activeConversationStore
+        } else {
+            localStore = ConversationLocalStore(credential: selectedCredential)
+            activeConversationStore = localStore
+            imageLoader = BatonImageLoader(endpoint: selectedCredential.conversationEndpoint, token: selectedCredential.accessToken, localStore: localStore) { [weak self] in
+                self?.discardTerminatedActiveSession(detail: String(localized: "媒体访问凭据已失效，请重新连接。"), matching: selectedCredential)
+            }
         }
         messages = []
         reducer = ConversationEventReducer()
