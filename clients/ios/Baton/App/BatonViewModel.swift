@@ -110,6 +110,9 @@ final class BatonViewModel: ObservableObject {
     /// an explicit retry after a lost response remains server-idempotent.
     private var endIdempotencyKey: UUID?
     private var selectionDraft: (interactionID: String, optionID: String, clientMessageID: UUID)?
+    /// Snapshot saves are sequenced so an older detached write cannot finish
+    /// after a newer one and restore stale conversation state on relaunch.
+    private var persistenceTask: Task<Void, Never>?
     private let deviceID: String
     private var cancellables = Set<AnyCancellable>()
 
@@ -340,6 +343,7 @@ final class BatonViewModel: ObservableObject {
                     clientMessageID: clientMessageID
                 )
                 guard self?.credential == credential else { return }
+                self?.resolveSelectionLocally(interactionID: selection.interactionID, optionID: option.id)
                 self?.merge(message)
                 self?.selectionDraft = nil
                 self?.errorMessage = nil
@@ -702,6 +706,11 @@ final class BatonViewModel: ObservableObject {
         if let credential { prefetchMedia(in: messages, using: credential) }
     }
 
+    private func resolveSelectionLocally(interactionID: String, optionID: String) {
+        guard reducer.resolveSelectionLocally(interactionID: interactionID, optionID: optionID) else { return }
+        selectionStates = reducer.selectionStates
+    }
+
     private func recordConversationInteraction(for credential: SessionCredential) {
         do {
             updateSavedSessions(try KeychainStore.recordConversationInteraction(credential: credential))
@@ -720,6 +729,7 @@ final class BatonViewModel: ObservableObject {
         streamTask?.cancel(); streamTask = nil
         mediaPrefetchTask?.cancel(); mediaPrefetchTask = nil
         cacheRestoreTask?.cancel(); cacheRestoreTask = nil
+        persistenceTask?.cancel(); persistenceTask = nil
         imageLoader?.invalidate()
         let persistenceError = removedCredential.flatMap { removePersistedSession($0) }
         guard persistenceError == nil else {
@@ -928,13 +938,19 @@ final class BatonViewModel: ObservableObject {
               let store = activeConversationStore else { return }
         let currentMessages = messages
         let currentSelectionStates = Array(selectionStates.values)
-        Task.detached(priority: .utility) {
-            try? store.saveSnapshot(
-                conversation: conversation,
-                messages: currentMessages,
-                cursor: cursor,
-                selectionStates: currentSelectionStates
-            )
+        persistenceTask?.cancel()
+        let previousTask = persistenceTask
+        persistenceTask = Task {
+            _ = await previousTask?.value
+            guard !Task.isCancelled else { return }
+            await Task.detached(priority: .utility) {
+                try? store.saveSnapshot(
+                    conversation: conversation,
+                    messages: currentMessages,
+                    cursor: cursor,
+                    selectionStates: currentSelectionStates
+                )
+            }.value
         }
     }
 

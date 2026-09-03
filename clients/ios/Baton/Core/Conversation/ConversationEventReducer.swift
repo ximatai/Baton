@@ -112,6 +112,20 @@ struct ConversationEventReducer: Equatable {
         else { messages.append(message); messages.sort { $0.createdAt < $1.createdAt } }
     }
 
+    /// A successful selection response is enough to converge the local UI even
+    /// when its lifecycle SSE envelope has not arrived yet. A later snapshot or
+    /// envelope remains authoritative and replaces this provisional state.
+    @discardableResult
+    mutating func resolveSelectionLocally(interactionID: String, optionID: String) -> Bool {
+        guard let state = selectionStates[interactionID], state.status == .open else { return false }
+        selectionStates[interactionID] = SelectionInteractionState(
+            interactionID: interactionID,
+            status: .answered,
+            selectedOptionID: optionID
+        )
+        return true
+    }
+
     private mutating func remember(_ event: BatonEvent) {
         seenEventSequences[event.id] = event.sequence; seenOrder.append(event.id)
         if seenOrder.count > maxSeenEvents {

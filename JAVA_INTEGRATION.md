@@ -26,10 +26,11 @@ Discovery document 内的 `capabilities` 只是服务端对当前 Conversation
 不需要也不应在 V1.1 回传。未来若要支持 camera/file/approval 等双向能力，
 必须另行定义协商、授权与降级语义，不能把未知字段视为已经协商成功。
 
-V1.2 的 `selection: true` 表示服务可提供受限的单选交互。Baton 在 join
-body 中声明 `client_capabilities.selection_interaction: true`；这是设备渲染能力，
-不是权限。服务端只可在兼容策略允许时下发 `selection_required`，否则退化为普通
-文本问题。`free_text_allowed` 与必答选择都通过现有 messages endpoint 提交
+V1.2 的 `selection: true` 表示服务可提供受限的单选交互。仅当 discovery 为
+`baton/1.2` 且声明该字段为 `true` 时，Baton 才会在 join body 中声明
+`client_capabilities.selection_interaction: true`；V1.1 和未声明该能力的服务收到的
+join body 保持不变。这是设备渲染能力，不是权限。服务端只可在兼容策略允许时下发
+`selection_required`，否则退化为普通文本问题。`free_text_allowed` 与必答选择都通过现有 messages endpoint 提交
 `selection_response`；服务端必须持久化状态、原子校验第一条有效回答，并以 snapshot
 的 `selection_states` 和 SSE `selection.resolved` / `selection.cancelled` 使重连和多设备一致。
 

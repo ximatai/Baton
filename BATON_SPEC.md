@@ -470,7 +470,8 @@ Snapshots include `selection_states`, each containing `interaction_id`,
 `selection.cancelled` carry the same state object as persisted SSE envelopes.
 At most one `selection_required` interaction may be open per Conversation.
 
-The join body may declare
+Only when discovery is exactly `baton/1.2` and declares `selection: true`, the
+join body may declare
 `"client_capabilities":{"selection_interaction":true}`. It is a narrow
 per-device rendering declaration, not authorization. A service must issue a
 required selection only when its compatibility policy proves every affected
@@ -496,7 +497,7 @@ shape and standard SSE framing.
 }
 ```
 
-V1.1 event types:
+Defined event types (V1.1 + V1.2):
 
 - `conversation.snapshot` — optional initial snapshot.
 - `message.created` — immutable server-created message.
@@ -529,7 +530,7 @@ and multimodal content.
 
 ## Capabilities
 
-The discovery document's `capabilities` object is the only V1.1 capability
+In V1.1, the discovery document's `capabilities` object is the only capability
 surface. It declares what this server accepts or emits for this Conversation;
 it is not a request for device capabilities and it does not grant permission.
 `text: true` is mandatory. `markdown`, `streaming`, `image`, and `content_append` may be declared
@@ -541,10 +542,18 @@ only when the service permits Baton to invoke End for the shared Conversation.
 A missing or false value means the client must not show an End operation; the
 server still enforces authorization.
 
-Bidirectional capability negotiation, per-device capabilities, and future keys
-such as `camera`, `file`, `approval`, `location`, and `notification` are
-explicitly deferred. A future version must define their lifecycle and fallback
-semantics rather than treating unknown keys as negotiated support.
+V1.2 defines one narrow exception: when discovery is exactly `baton/1.2` and
+declares `selection: true`, Baton may include
+`client_capabilities.selection_interaction: true` in its join body. V1.1
+services, and V1.2 services without that declaration, receive the unchanged
+V1.1 join body. This per-device rendering declaration is not authorization; the
+service applies its compatibility policy before it creates a required
+selection.
+
+All other bidirectional or per-device capabilities, and future keys such as
+`camera`, `file`, `approval`, `location`, and `notification`, remain deferred.
+A future version must define their lifecycle and fallback semantics rather than
+treating unknown keys as negotiated support.
 
 ## Integration acceptance requirements
 

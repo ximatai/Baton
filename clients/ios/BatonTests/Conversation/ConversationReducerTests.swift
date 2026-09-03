@@ -238,6 +238,26 @@ struct ConversationReducerTests {
         #expect(reducer.selectionStates["sel_1"] == SelectionInteractionState(interactionID: "sel_1", status: .answered, selectedOptionID: "confirm"))
     }
 
+    @Test func successfulSelectionResponseConvergesOpenStateBeforeItsSSEArrives() {
+        let selection = MessageSelection(
+            interactionID: "sel_1",
+            prompt: "确认继续吗？",
+            inputPolicy: .selectionRequired,
+            presentation: .confirmation,
+            options: [MessageSelectionOption(id: "confirm", label: "确认")]
+        )
+        let message = ConversationMessage(id: "msg_selection", clientMessageID: nil, conversationID: "conv_1", role: .assistant, content: [.selection(selection)], createdAt: "2026-08-26T00:00:00Z", status: "completed")
+        var reducer = ConversationEventReducer()
+        reducer.replaceSnapshot(ConversationSnapshot(
+            id: "conv_1", title: "Test", agentName: nil, messages: [message], eventCursor: eventCursor("evt_10", 10),
+            selectionStates: [SelectionInteractionState(interactionID: "sel_1", status: .open, selectedOptionID: nil)]
+        ))
+
+        let didResolve = reducer.resolveSelectionLocally(interactionID: "sel_1", optionID: "confirm")
+        #expect(didResolve)
+        #expect(reducer.selectionStates["sel_1"] == SelectionInteractionState(interactionID: "sel_1", status: .answered, selectedOptionID: "confirm"))
+    }
+
     @Test func messagePreservesOrderedImageAndTextContentAndSafelyDowngradesUnknownItems() throws {
         let json = """
         {"id":"msg_1","conversation_id":"conv_1","role":"assistant","content":[{"type":"text","text":"趋势图："},{"type":"image","media_id":"med_chart_1","url":"https://service.example/v1/baton/media/chart.png","mime_type":"image/png","width":640,"height":400,"alt":"月度趋势图"},{"type":"future_card","alt":"稍后支持的卡片"},{"type":"text","text":"已附上。"}],"created_at":"2026-08-26T00:00:00Z","status":"completed"}
