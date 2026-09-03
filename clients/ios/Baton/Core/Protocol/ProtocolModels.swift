@@ -19,20 +19,26 @@ struct BatonCapabilities: Codable, Equatable {
     /// A shared Conversation lifecycle operation; false unless the service
     /// explicitly declares that Baton may invoke it.
     let conversationEnd: Bool
+    /// The service can render selection interactions for a device which
+    /// explicitly advertised support during pairing. This remains a server
+    /// declaration, not permission for arbitrary client-side actions.
+    let selection: Bool
 
     enum CodingKeys: String, CodingKey {
         case text, markdown, streaming, image
         case contentAppend = "content_append"
         case conversationEnd = "conversation_end"
+        case selection
     }
 
-    init(text: Bool = true, markdown: Bool = false, streaming: Bool = false, image: Bool = false, contentAppend: Bool = false, conversationEnd: Bool = false) {
+    init(text: Bool = true, markdown: Bool = false, streaming: Bool = false, image: Bool = false, contentAppend: Bool = false, conversationEnd: Bool = false, selection: Bool = false) {
         self.text = text
         self.markdown = markdown
         self.streaming = streaming
         self.image = image
         self.contentAppend = contentAppend
         self.conversationEnd = conversationEnd
+        self.selection = selection
     }
 
     init(from decoder: Decoder) throws {
@@ -43,7 +49,17 @@ struct BatonCapabilities: Codable, Equatable {
         image = try container.decodeIfPresent(Bool.self, forKey: .image) ?? false
         contentAppend = try container.decodeIfPresent(Bool.self, forKey: .contentAppend) ?? false
         conversationEnd = try container.decodeIfPresent(Bool.self, forKey: .conversationEnd) ?? false
+        selection = try container.decodeIfPresent(Bool.self, forKey: .selection) ?? false
     }
+}
+
+/// A per-device declaration submitted while joining. It only tells the
+/// service which structured content the device can render; the service still
+/// owns all authorization, validation, and fallback decisions.
+struct BatonClientCapabilities: Encodable, Equatable {
+    let selectionInteraction: Bool
+
+    enum CodingKeys: String, CodingKey { case selectionInteraction = "selection_interaction" }
 }
 
 enum PairingApprovalMode: String, Codable, Equatable {
@@ -96,6 +112,12 @@ struct PairingDocument: Codable, Equatable {
         try container.encode(capabilities, forKey: .capabilities)
         try container.encode(approvalMode, forKey: .approvalMode)
     }
+
+    /// V1.1 services may reject unknown JSON fields. Only a V1.2 service that
+    /// explicitly declares selection support receives the optional join hint.
+    var supportsSelectionCapabilityNegotiation: Bool {
+        protocolVersion == "baton/1.2" && capabilities.selection
+    }
 }
 
 /// `mediaID` is the stable, service-owned identity of an immutable media
@@ -121,15 +143,117 @@ struct MessageImage: Codable, Equatable, Identifiable {
     }
 }
 
+enum SelectionInputPolicy: String, Codable, Equatable {
+    case freeTextAllowed = "free_text_allowed"
+    case selectionRequired = "selection_required"
+}
+
+enum SelectionPresentation: String, Codable, Equatable {
+    case standard
+    case confirmation
+}
+
+struct MessageSelectionOption: Codable, Equatable, Identifiable {
+    let id: String
+    let label: String
+
+    var isPlausible: Bool { !id.isEmpty && !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+}
+
+/// A server-created, immutable question attached to an assistant message.
+/// Its current lifecycle state is carried separately by ConversationSnapshot
+/// and selection lifecycle SSE events.
+struct MessageSelection: Codable, Equatable, Identifiable {
+    let interactionID: String
+    let prompt: String
+    let inputPolicy: SelectionInputPolicy
+    let presentation: SelectionPresentation
+    let options: [MessageSelectionOption]
+
+    var id: String { interactionID }
+
+    enum CodingKeys: String, CodingKey {
+        case interactionID = "interaction_id"
+        case prompt
+        case inputPolicy = "input_policy"
+        case presentation, options
+    }
+
+    var isPlausible: Bool {
+        guard !interactionID.isEmpty,
+              !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              (2...8).contains(options.count),
+              options.allSatisfy(\.isPlausible),
+              Set(options.map(\.id)).count == options.count else { return false }
+        if presentation == .confirmation {
+            return inputPolicy == .selectionRequired
+                && options.map(\.id) == ["confirm", "cancel"]
+        }
+        return true
+    }
+}
+
+/// User content for a selected option. `label` is omitted by the client and
+/// populated only by the server when it persists the corresponding message.
+struct SelectionResponse: Codable, Equatable {
+    let interactionID: String
+    let optionID: String
+    let label: String?
+
+    enum CodingKeys: String, CodingKey {
+        case interactionID = "interaction_id"
+        case optionID = "option_id"
+        case label
+    }
+
+    init(interactionID: String, optionID: String, label: String? = nil) {
+        self.interactionID = interactionID
+        self.optionID = optionID
+        self.label = label
+    }
+
+    var isPlausible: Bool { !interactionID.isEmpty && !optionID.isEmpty }
+}
+
+enum SelectionInteractionStatus: String, Codable, Equatable {
+    case open, answered, cancelled, superseded, expired
+}
+
+struct SelectionInteractionState: Codable, Equatable, Identifiable {
+    let interactionID: String
+    let status: SelectionInteractionStatus
+    let selectedOptionID: String?
+
+    var id: String { interactionID }
+
+    enum CodingKeys: String, CodingKey {
+        case interactionID = "interaction_id"
+        case status
+        case selectedOptionID = "selected_option_id"
+    }
+
+    var isPlausible: Bool {
+        guard !interactionID.isEmpty else { return false }
+        return status != .answered || selectedOptionID?.isEmpty == false
+    }
+}
+
 /// Ordered Conversation content. Unknown items stay explicit rather than being
 /// silently coerced to text, so future server content cannot run as markup or
 /// be mistaken for a supported image.
 enum MessageContent: Codable, Equatable {
     case text(String)
     case image(MessageImage)
+    case selection(MessageSelection)
+    case selectionResponse(SelectionResponse)
     case unsupported(type: String, alt: String?)
 
-    private enum CodingKeys: String, CodingKey { case type, text, mediaID = "media_id", url, mimeType = "mime_type", width, height, alt }
+    private enum CodingKeys: String, CodingKey {
+        case type, text, mediaID = "media_id", url, mimeType = "mime_type", width, height, alt
+        case interactionID = "interaction_id"
+        case inputPolicy = "input_policy"
+        case presentation, options, optionID = "option_id", label
+    }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -144,6 +268,18 @@ enum MessageContent: Codable, Equatable {
                 return
             }
             self = .image(image)
+        case "selection":
+            guard let selection = try? MessageSelection(from: decoder), selection.isPlausible else {
+                self = .unsupported(type: type, alt: nil)
+                return
+            }
+            self = .selection(selection)
+        case "selection_response":
+            guard let response = try? SelectionResponse(from: decoder), response.isPlausible else {
+                self = .unsupported(type: type, alt: nil)
+                return
+            }
+            self = .selectionResponse(response)
         default:
             self = .unsupported(type: type, alt: try? container.decodeIfPresent(String.self, forKey: .alt))
         }
@@ -163,6 +299,14 @@ enum MessageContent: Codable, Equatable {
             try container.encode(image.width, forKey: .width)
             try container.encode(image.height, forKey: .height)
             try container.encode(image.alt, forKey: .alt)
+        case let .selection(selection):
+            try container.encode("selection", forKey: .type)
+            try selection.encode(to: encoder)
+        case let .selectionResponse(response):
+            try container.encode("selection_response", forKey: .type)
+            try container.encode(response.interactionID, forKey: .interactionID)
+            try container.encode(response.optionID, forKey: .optionID)
+            try container.encodeIfPresent(response.label, forKey: .label)
         case let .unsupported(type, alt):
             try container.encode(type, forKey: .type)
             try container.encodeIfPresent(alt, forKey: .alt)
@@ -177,6 +321,24 @@ enum MessageContent: Codable, Equatable {
     var image: MessageImage? {
         guard case let .image(image) = self else { return nil }
         return image
+    }
+
+    var selection: MessageSelection? {
+        guard case let .selection(selection) = self else { return nil }
+        return selection
+    }
+
+    var selectionResponse: SelectionResponse? {
+        guard case let .selectionResponse(response) = self else { return nil }
+        return response
+    }
+
+    func isValid(for role: MessageRole) -> Bool {
+        switch self {
+        case .selection: return role == .assistant
+        case .selectionResponse: return role == .user
+        default: return true
+        }
     }
 }
 
@@ -194,7 +356,8 @@ struct ConversationMessage: Codable, Identifiable, Equatable {
     enum CodingKeys: String, CodingKey { case id, role, content, status; case clientMessageID = "client_message_id"; case conversationID = "conversation_id"; case createdAt = "created_at" }
     var text: String { content.compactMap(\.text).joined() }
     var isValidStreamingContent: Bool {
-        status != "streaming" || (role == .assistant && content.count == 1 && content[0].text != nil)
+        guard content.allSatisfy({ $0.isValid(for: role) }) else { return false }
+        return status != "streaming" || (role == .assistant && content.count == 1 && content[0].text != nil)
     }
 
     mutating func appendStreamingDelta(_ delta: String) -> Bool {
@@ -269,21 +432,24 @@ struct ConversationSnapshot: Codable {
     /// Optional on the wire during the V1 transition. A snapshot must expose
     /// live runs once the server supports Stop-after-reconnect.
     let activeRuns: [ActiveRun]
+    let selectionStates: [SelectionInteractionState]
 
     enum CodingKeys: String, CodingKey {
         case id, title, messages
         case agentName = "agent_name"
         case eventCursor = "event_cursor"
         case activeRuns = "active_runs"
+        case selectionStates = "selection_states"
     }
 
-    init(id: String, title: String, agentName: String?, messages: [ConversationMessage], eventCursor: EventCursor, activeRuns: [ActiveRun] = []) {
+    init(id: String, title: String, agentName: String?, messages: [ConversationMessage], eventCursor: EventCursor, activeRuns: [ActiveRun] = [], selectionStates: [SelectionInteractionState] = []) {
         self.id = id
         self.title = title
         self.agentName = agentName
         self.messages = messages
         self.eventCursor = eventCursor
         self.activeRuns = activeRuns
+        self.selectionStates = selectionStates
     }
 
     init(from decoder: Decoder) throws {
@@ -294,17 +460,23 @@ struct ConversationSnapshot: Codable {
         messages = try container.decode([ConversationMessage].self, forKey: .messages)
         eventCursor = try container.decode(EventCursor.self, forKey: .eventCursor)
         activeRuns = try container.decodeIfPresent([ActiveRun].self, forKey: .activeRuns) ?? []
+        selectionStates = try container.decodeIfPresent([SelectionInteractionState].self, forKey: .selectionStates) ?? []
+        guard selectionStates.allSatisfy(\.isPlausible), Set(selectionStates.map(\.interactionID)).count == selectionStates.count else {
+            throw DecodingError.dataCorruptedError(forKey: .selectionStates, in: container, debugDescription: "Selection states must be unique and valid.")
+        }
     }
 }
 struct PairingJoinRequest: Encodable {
     let deviceID: String
     let deviceName: String
     let deviceProof: String
+    let clientCapabilities: BatonClientCapabilities?
 
     enum CodingKeys: String, CodingKey {
         case deviceID = "device_id"
         case deviceName = "device_name"
         case deviceProof = "device_proof"
+        case clientCapabilities = "client_capabilities"
     }
 }
 

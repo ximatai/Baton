@@ -77,6 +77,7 @@ final class BatonViewModel: ObservableObject {
     /// Owns the in-memory, authenticated media cache for the selected
     /// conversation. Views receive this narrow loader, never a credential.
     @Published private(set) var imageLoader: BatonImageLoader?
+    @Published private(set) var selectionStates: [String: SelectionInteractionState] = [:]
 
     private let api = BatonAPIClient()
     private let speechInput = SpeechInputService()
@@ -108,23 +109,32 @@ final class BatonViewModel: ObservableObject {
     /// Retained until this End operation reaches a terminal local outcome, so
     /// an explicit retry after a lost response remains server-idempotent.
     private var endIdempotencyKey: UUID?
+    private var selectionDraft: (interactionID: String, optionID: String, clientMessageID: UUID)?
     private let deviceID: String
     private var cancellables = Set<AnyCancellable>()
 
     var canSend: Bool {
         isConnected
             && credential != nil
+            && activeRequiredSelection == nil
             && !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && !isBusy
             && !isSendingMessage
     }
-    var isComposerDisabled: Bool { !isConnected || isBusy || isSendingMessage }
+    var isComposerDisabled: Bool { !isConnected || isBusy || isSendingMessage || activeRequiredSelection != nil }
+    var isSelectionRequired: Bool { activeRequiredSelection != nil }
     var composerUnavailableMessage: String? {
         guard credential != nil else { return String(localized: "此对话已不可用") }
+        if activeRequiredSelection != nil { return String(localized: "请先完成选择") }
         guard !isConnected else { return nil }
         return isBusy
             ? String(localized: "正在连接，暂不能发送消息")
             : String(localized: "当前离线，暂不能发送消息")
+    }
+    var composerUnavailableSymbolName: String {
+        guard credential != nil else { return "exclamationmark.circle" }
+        if activeRequiredSelection != nil { return "checklist" }
+        return "wifi.slash"
     }
     var isUnencryptedTransport: Bool {
         guard let endpoint = credential?.conversationEndpoint else { return false }
@@ -139,6 +149,17 @@ final class BatonViewModel: ObservableObject {
             return localTitle
         }
         return conversation?.title ?? credential.conversation.title
+    }
+
+    private var activeRequiredSelection: MessageSelection? {
+        messages
+            .lazy
+            .flatMap(\.content)
+            .compactMap(\.selection)
+            .first { selection in
+                selection.inputPolicy == .selectionRequired
+                    && selectionStates[selection.interactionID]?.status == .open
+            }
     }
 
     init() {
@@ -279,6 +300,55 @@ final class BatonViewModel: ObservableObject {
                 guard let self else { return }
                 if self.isConversationClosed(error) || self.isInvalidToken(error) {
                     self.discardTerminatedActiveSession(error, matching: credential)
+                } else {
+                    self.errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    func select(_ selection: MessageSelection, option: MessageSelectionOption) {
+        guard isConnected,
+              credential != nil,
+              !isBusy,
+              !isSendingMessage,
+              selectionStates[selection.interactionID]?.status == .open,
+              selection.options.contains(where: { $0.id == option.id }) else { return }
+        let clientMessageID: UUID
+        if let selectionDraft,
+           selectionDraft.interactionID == selection.interactionID,
+           selectionDraft.optionID == option.id {
+            clientMessageID = selectionDraft.clientMessageID
+        } else {
+            clientMessageID = UUID()
+            selectionDraft = (selection.interactionID, option.id, clientMessageID)
+        }
+        guard let credential else { return }
+        isSendingMessage = true
+        Task { [weak self, api] in
+            defer {
+                if self?.credential == credential {
+                    self?.isSendingMessage = false
+                }
+            }
+            do {
+                let message = try await api.sendSelection(
+                    endpoint: credential.conversationEndpoint,
+                    token: credential.accessToken,
+                    interactionID: selection.interactionID,
+                    optionID: option.id,
+                    clientMessageID: clientMessageID
+                )
+                guard self?.credential == credential else { return }
+                self?.merge(message)
+                self?.selectionDraft = nil
+                self?.errorMessage = nil
+            } catch {
+                guard self?.credential == credential, let self else { return }
+                if self.isConversationClosed(error) || self.isInvalidToken(error) {
+                    self.discardTerminatedActiveSession(error, matching: credential)
+                } else if case let CompanionAPIError.server(_, code, _) = error, code == "selection_resolved" {
+                    self.reconnect()
                 } else {
                     self.errorMessage = error.localizedDescription
                 }
@@ -513,6 +583,7 @@ final class BatonViewModel: ObservableObject {
         // again immediately before mutable UI/Keychain state is touched.
         guard acceptsActiveSnapshot(for: credential) else { return false }
         messages = reducer.messages
+        selectionStates = reducer.selectionStates
         conversation = ConversationDescriptor(id: snapshot.id, title: snapshot.title, agentName: snapshot.agentName)
         restoreActiveRun(from: snapshot)
         // An accepted snapshot is the sole persistent read boundary. In
@@ -565,6 +636,7 @@ final class BatonViewModel: ObservableObject {
         }
         let mustResync = reducer.apply(event)
         messages = reducer.messages
+        selectionStates = reducer.selectionStates
         if mustResync {
             await resynchronize(using: credential)
             return true
@@ -658,9 +730,10 @@ final class BatonViewModel: ObservableObject {
             errorMessage = persistenceError
             return false
         }
-        credential = nil; conversation = nil; messages = []; reducer = ConversationEventReducer(); imageLoader = nil; activeConversationStore = nil
+        credential = nil; conversation = nil; messages = []; selectionStates = [:]; reducer = ConversationEventReducer(); imageLoader = nil; activeConversationStore = nil
         isSendingMessage = false
         draftMessageText = nil; draftMessageID = nil
+        selectionDraft = nil
         activeRunID = nil; agentActivity = .idle; isConnected = false; isBusy = false; connectionStatus = String(localized: "尚未连接"); errorMessage = persistenceError
         endIdempotencyKey = nil
         return true
@@ -837,10 +910,12 @@ final class BatonViewModel: ObservableObject {
             title: cached.conversation.title,
             agentName: cached.conversation.agentName,
             messages: cached.messages,
-            eventCursor: cached.cursor
+            eventCursor: cached.cursor,
+            selectionStates: cached.selectionStates
         )
         guard reducer.replaceSnapshot(snapshot) else { return }
         messages = reducer.messages
+        selectionStates = reducer.selectionStates
         conversation = cached.conversation
         activeRunID = nil
         agentActivity = .idle
@@ -852,8 +927,14 @@ final class BatonViewModel: ObservableObject {
               let cursor = reducer.cursor,
               let store = activeConversationStore else { return }
         let currentMessages = messages
+        let currentSelectionStates = Array(selectionStates.values)
         Task.detached(priority: .utility) {
-            try? store.saveSnapshot(conversation: conversation, messages: currentMessages, cursor: cursor)
+            try? store.saveSnapshot(
+                conversation: conversation,
+                messages: currentMessages,
+                cursor: cursor,
+                selectionStates: currentSelectionStates
+            )
         }
     }
 

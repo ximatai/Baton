@@ -4,6 +4,7 @@ import Foundation
 /// makes atomic snapshot/cursor behavior and duplicate SSE handling testable.
 struct ConversationEventReducer: Equatable {
     private(set) var messages: [ConversationMessage] = []
+    private(set) var selectionStates: [String: SelectionInteractionState] = [:]
     private(set) var cursor: EventCursor?
     /// Event identifiers are not sufficient for replay safety on their own:
     /// the same id with a rewritten sequence is a continuity failure.
@@ -15,6 +16,7 @@ struct ConversationEventReducer: Equatable {
     mutating func replaceSnapshot(_ snapshot: ConversationSnapshot) -> Bool {
         guard snapshot.messages.allSatisfy(\.isValidStreamingContent) else { return false }
         messages = snapshot.messages.sorted { $0.createdAt < $1.createdAt }
+        selectionStates = Dictionary(uniqueKeysWithValues: snapshot.selectionStates.map { ($0.interactionID, $0) })
         cursor = snapshot.eventCursor
         seenEventSequences.removeAll(keepingCapacity: true)
         seenOrder.removeAll(keepingCapacity: true)
@@ -49,6 +51,15 @@ struct ConversationEventReducer: Equatable {
         // item means local state cannot be reconciled without an atomic snapshot.
         if event.type == "message.content.appended" {
             guard next.applyContentAppend(event.data) else { return true }
+            next.remember(event)
+            next.advanceCursor(for: event)
+            self = next
+            return false
+        }
+
+        if event.type == "selection.resolved" || event.type == "selection.cancelled" {
+            guard let state = next.decodeSelectionState(event.data), state.isPlausible else { return true }
+            next.selectionStates[state.interactionID] = state
             next.remember(event)
             next.advanceCursor(for: event)
             self = next
@@ -116,5 +127,11 @@ struct ConversationEventReducer: Equatable {
               JSONSerialization.isValidJSONObject(message.foundationValue),
               let data = try? JSONSerialization.data(withJSONObject: message.foundationValue) else { return nil }
         return try? JSONDecoder().decode(ConversationMessage.self, from: data)
+    }
+
+    private func decodeSelectionState(_ value: JSONValue) -> SelectionInteractionState? {
+        guard JSONSerialization.isValidJSONObject(value.foundationValue),
+              let data = try? JSONSerialization.data(withJSONObject: value.foundationValue) else { return nil }
+        return try? JSONDecoder().decode(SelectionInteractionState.self, from: data)
     }
 }

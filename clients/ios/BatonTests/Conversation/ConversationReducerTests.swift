@@ -215,6 +215,29 @@ struct ConversationReducerTests {
         #expect(ActiveRun.current(in: snapshot.activeRuns)?.id == "run_1")
     }
 
+    @Test func selectionStateRestoresFromSnapshotAndAdvancesThroughResolvedEvent() {
+        let selection = MessageSelection(
+            interactionID: "sel_1",
+            prompt: "确认继续吗？",
+            inputPolicy: .selectionRequired,
+            presentation: .confirmation,
+            options: [MessageSelectionOption(id: "confirm", label: "确认"), MessageSelectionOption(id: "cancel", label: "取消")]
+        )
+        let message = ConversationMessage(id: "msg_selection", clientMessageID: nil, conversationID: "conv_1", role: .assistant, content: [.selection(selection)], createdAt: "2026-08-26T00:00:00Z", status: "completed")
+        var reducer = ConversationEventReducer()
+        reducer.replaceSnapshot(ConversationSnapshot(
+            id: "conv_1", title: "Test", agentName: nil, messages: [message], eventCursor: eventCursor("evt_10", 10),
+            selectionStates: [SelectionInteractionState(interactionID: "sel_1", status: .open, selectedOptionID: nil)]
+        ))
+        #expect(reducer.selectionStates["sel_1"]?.status == .open)
+        let event = BatonEvent(id: "evt_11", sequence: 11, type: "selection.resolved", data: .object([
+            "interaction_id": .string("sel_1"), "status": .string("answered"), "selected_option_id": .string("confirm")
+        ]))
+        let requiresResync = reducer.apply(event)
+        #expect(!requiresResync)
+        #expect(reducer.selectionStates["sel_1"] == SelectionInteractionState(interactionID: "sel_1", status: .answered, selectedOptionID: "confirm"))
+    }
+
     @Test func messagePreservesOrderedImageAndTextContentAndSafelyDowngradesUnknownItems() throws {
         let json = """
         {"id":"msg_1","conversation_id":"conv_1","role":"assistant","content":[{"type":"text","text":"趋势图："},{"type":"image","media_id":"med_chart_1","url":"https://service.example/v1/baton/media/chart.png","mime_type":"image/png","width":640,"height":400,"alt":"月度趋势图"},{"type":"future_card","alt":"稍后支持的卡片"},{"type":"text","text":"已附上。"}],"created_at":"2026-08-26T00:00:00Z","status":"completed"}

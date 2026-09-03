@@ -46,6 +46,7 @@ struct PairingTests {
         #expect(manual.capabilities.image)
         #expect(manual.capabilities.contentAppend)
         #expect(!manual.capabilities.conversationEnd)
+        #expect(!manual.supportsSelectionCapabilityNegotiation)
         let endEnabledJSON = base.replacingOccurrences(
             of: #""content_append":true"#,
             with: #""content_append":true,"conversation_end":true"#
@@ -55,5 +56,17 @@ struct PairingTests {
         let autoJSON = String(base.dropLast()) + #","approval_mode":"auto"}"#
         let auto = try JSONDecoder().decode(PairingDocument.self, from: Data(autoJSON.utf8))
         #expect(auto.approvalMode == .auto)
+
+        var selectionObject = try #require(JSONSerialization.jsonObject(with: Data(base.utf8)) as? [String: Any])
+        var selectionCapabilities = try #require(selectionObject["capabilities"] as? [String: Any])
+        selectionObject["protocol"] = "baton/1.2"
+        selectionCapabilities["selection"] = true
+        selectionObject["capabilities"] = selectionCapabilities
+        let selection = try JSONDecoder().decode(PairingDocument.self, from: JSONSerialization.data(withJSONObject: selectionObject))
+        #expect(selection.supportsSelectionCapabilityNegotiation)
+
+        let legacyJoin = try JSONEncoder().encode(PairingJoinRequest(deviceID: "device", deviceName: "iPhone", deviceProof: "proof", clientCapabilities: nil))
+        let legacyBody = try #require(JSONSerialization.jsonObject(with: legacyJoin) as? [String: Any])
+        #expect(legacyBody["client_capabilities"] == nil)
     }
 }

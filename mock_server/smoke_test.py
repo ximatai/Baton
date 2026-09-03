@@ -122,8 +122,8 @@ pair = create_pairing()
 pairing_id = pair["pairing_id"]
 status, discovery = request("/.well-known/baton/pair/" + pairing_id)
 assert status == 200 and discovery["conversation"]["id"].startswith("conv_") and "join" in discovery["endpoints"]
-assert discovery["protocol"] == "baton/1.1"
-assert discovery["capabilities"] == {"text": True, "markdown": True, "streaming": True, "image": True, "content_append": True, "conversation_end": True}
+assert discovery["protocol"] == "baton/1.2"
+assert discovery["capabilities"] == {"text": True, "markdown": True, "streaming": True, "image": True, "content_append": True, "conversation_end": True, "selection": True}
 CONVERSATION_ID = discovery["conversation"]["id"]
 status, denied = request(f"/v1/baton/conversations/{CONVERSATION_ID}")
 assert status == 401 and denied["error"]["code"] == "invalid_token"
@@ -131,7 +131,7 @@ assert status == 401 and denied["error"]["code"] == "invalid_token"
 # The iPhone joins, then waits for the existing web client to decide.
 proof = "proof_" + uuid.uuid4().hex + uuid.uuid4().hex
 status, joined = request("/v1/baton/pairings/" + pairing_id + "/requests", "POST",
-                         {"device_id": "smoke", "device_name": "Smoke iPhone", "device_proof": proof})
+                         {"device_id": "smoke", "device_name": "Smoke iPhone", "device_proof": proof, "client_capabilities": {"selection_interaction": True}})
 assert status == 202 and joined["status"] == "pending"
 poll = urlparse(joined["poll_url"])
 base = urlparse(BASE)
@@ -163,7 +163,8 @@ status, auto_discovery = request("/.well-known/baton/pair/" + auto_pair["pairing
 assert status == 200 and auto_pair["approval_mode"] == "auto" and auto_discovery["approval_mode"] == "auto"
 auto_proof = "proof_" + uuid.uuid4().hex + uuid.uuid4().hex
 status, auto_join = request("/v1/baton/pairings/" + auto_pair["pairing_id"] + "/requests", "POST",
-                            {"device_id": "auto-smoke", "device_name": "Auto Smoke iPhone", "device_proof": auto_proof})
+                            {"device_id": "auto-smoke", "device_name": "Auto Smoke iPhone", "device_proof": auto_proof,
+                             "client_capabilities": {"selection_interaction": True}})
 assert status == 202 and auto_join["status"] == "approved" and "access_token" not in auto_join
 status, auto_forbidden = request("/v1/baton/pairings/" + auto_pair["pairing_id"] + "/requests/" + auto_join["request_id"],
                                  extra_headers={"X-Baton-Device-Proof": "wrong-proof"})
@@ -189,6 +190,46 @@ with urllib.request.urlopen(image_request, timeout=3) as image_response:
     assert image_response.status == 200 and image_response.headers.get_content_type() == "image/png"
 assert image_response.headers.get("Cache-Control") == "private, no-store"
 assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n") and len(image_bytes) < 12 * 1024 * 1024
+
+# Selection interactions are persisted conversation state. A required
+# confirmation blocks text on the server, but a structured confirm response
+# resolves it exactly once and is replayable to every device.
+status, _ = request(f"/v1/baton/conversations/{CONVERSATION_ID}/messages", "POST", {
+    "client_message_id": str(uuid.uuid4()), "content": [{"type": "text", "text": "确认"}]}, token)
+assert status == 201
+status, selection_snapshot = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=token)
+required = next(part for message in selection_snapshot["messages"] for part in message["content"] if part["type"] == "selection")
+assert required["presentation"] == "confirmation" and required["input_policy"] == "selection_required"
+assert selection_snapshot["selection_states"] == [{"interaction_id": required["interaction_id"], "status": "open"}]
+status, blocked = request(f"/v1/baton/conversations/{CONVERSATION_ID}/messages", "POST", {
+    "client_message_id": str(uuid.uuid4()), "content": [{"type": "text", "text": "should be blocked"}]}, token)
+assert status == 409 and blocked["error"]["code"] == "selection_required"
+selection_id = str(uuid.uuid4())
+selection_payload = {"client_message_id": selection_id, "content": [{"type": "selection_response", "interaction_id": required["interaction_id"], "option_id": "confirm"}]}
+status, chosen = request(f"/v1/baton/conversations/{CONVERSATION_ID}/messages", "POST", selection_payload, token)
+status2, chosen_again = request(f"/v1/baton/conversations/{CONVERSATION_ID}/messages", "POST", selection_payload, token)
+assert status == 201 and status2 == 200 and chosen["id"] == chosen_again["id"]
+assert chosen["content"][0]["label"] == "确认"
+status, resolved_snapshot = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=token)
+assert resolved_snapshot["selection_states"] == [{"interaction_id": required["interaction_id"], "status": "answered", "selected_option_id": "confirm"}]
+
+# A legacy device without the capability hint can remain in the Conversation,
+# but then the service must not create a required interaction that it cannot
+# complete. The initiating device still receives a normal text reply.
+legacy_pair = create_pairing({"approval_mode": "auto"})
+legacy_proof = "proof_" + uuid.uuid4().hex + uuid.uuid4().hex
+status, legacy_join = request("/v1/baton/pairings/" + legacy_pair["pairing_id"] + "/requests", "POST",
+                              {"device_id": "legacy", "device_name": "Legacy iPhone", "device_proof": legacy_proof})
+assert status == 202 and legacy_join["status"] == "approved"
+status, legacy_credential = request("/v1/baton/pairings/" + legacy_pair["pairing_id"] + "/requests/" + legacy_join["request_id"],
+                                    extra_headers={"X-Baton-Device-Proof": legacy_proof})
+assert status == 200 and legacy_credential["access_token"]
+selection_count = sum(1 for message in resolved_snapshot["messages"] for part in message["content"] if part["type"] == "selection")
+status, _ = request(f"/v1/baton/conversations/{CONVERSATION_ID}/messages", "POST", {
+    "client_message_id": str(uuid.uuid4()), "content": [{"type": "text", "text": "确认"}]}, token)
+assert status == 201
+status, legacy_safe_snapshot = request(f"/v1/baton/conversations/{CONVERSATION_ID}", token=token)
+assert sum(1 for message in legacy_safe_snapshot["messages"] for part in message["content"] if part["type"] == "selection") == selection_count
 client_id = str(uuid.uuid4())
 payload = {"client_message_id": client_id, "content": [{"type": "text", "text": "hello"}]}
 status, first = request(f"/v1/baton/conversations/{CONVERSATION_ID}/messages", "POST", payload, token)
@@ -389,4 +430,4 @@ next_pair = create_pairing()
 status, next_discovery = request("/.well-known/baton/pair/" + next_pair["pairing_id"])
 assert status == 200 and next_discovery["conversation"]["id"] != CONVERSATION_ID
 
-print("smoke test passed: V1.1 media identity/append replay, pairing safety, source-of-truth streaming snapshots, terminal cancel/failure, invalid-cursor resync, exact session revocation, and shared conversation end")
+print("smoke test passed: V1.2 selection replay, media identity/append replay, pairing safety, source-of-truth streaming snapshots, terminal cancel/failure, invalid-cursor resync, exact session revocation, and shared conversation end")

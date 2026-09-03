@@ -8,6 +8,24 @@ nonisolated struct ConversationLocalStore: Sendable {
         let conversation: ConversationDescriptor
         let messages: [ConversationMessage]
         let cursor: EventCursor
+        let selectionStates: [SelectionInteractionState]
+
+        enum CodingKeys: String, CodingKey { case conversation, messages, cursor, selectionStates = "selection_states" }
+
+        init(conversation: ConversationDescriptor, messages: [ConversationMessage], cursor: EventCursor, selectionStates: [SelectionInteractionState] = []) {
+            self.conversation = conversation
+            self.messages = messages
+            self.cursor = cursor
+            self.selectionStates = selectionStates
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            conversation = try container.decode(ConversationDescriptor.self, forKey: .conversation)
+            messages = try container.decode([ConversationMessage].self, forKey: .messages)
+            cursor = try container.decode(EventCursor.self, forKey: .cursor)
+            selectionStates = try container.decodeIfPresent([SelectionInteractionState].self, forKey: .selectionStates) ?? []
+        }
     }
 
     private let conversationKey: String
@@ -29,8 +47,8 @@ nonisolated struct ConversationLocalStore: Sendable {
         } ?? nil
     }
 
-    func saveSnapshot(conversation: ConversationDescriptor, messages: [ConversationMessage], cursor: EventCursor) throws {
-        let data = try JSONEncoder().encode(CachedSnapshot(conversation: conversation, messages: messages, cursor: cursor))
+    func saveSnapshot(conversation: ConversationDescriptor, messages: [ConversationMessage], cursor: EventCursor, selectionStates: [SelectionInteractionState] = []) throws {
+        let data = try JSONEncoder().encode(CachedSnapshot(conversation: conversation, messages: messages, cursor: cursor, selectionStates: selectionStates))
         _ = try withActiveLease { try write(data, to: snapshotURL) }
     }
 
