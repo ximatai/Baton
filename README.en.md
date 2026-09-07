@@ -4,6 +4,8 @@
 
 **Give any existing Web Agent system an iPhone companion for voice-friendly input.**
 
+[<img src="https://tools.applemediaservices.com/api/badges/download-on-the-app-store/black/en-us?size=250x83&amp;releaseDate=0" alt="Download Baton Agent on the App Store" height="50">](https://apps.apple.com/cn/app/baton-agent/id6806605185)
+
 ## A familiar situation
 
 More and more websites, enterprise applications, and Agent workspaces include an

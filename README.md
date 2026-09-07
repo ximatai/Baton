@@ -4,6 +4,8 @@
 
 **让任何已有的 Web Agent 系统，多一个可语音输入的 iPhone 客户端。**
 
+[<img src="https://tools.applemediaservices.com/api/badges/download-on-the-app-store/black/zh-cn?size=250x83&amp;releaseDate=0" alt="从 App Store 下载 Baton Agent" height="50">](https://apps.apple.com/cn/app/baton-agent/id6806605185)
+
 ## 从一个真实场景开始
 
 越来越多的网站、企业应用和 Agent Workspace 都提供了 Agent 对话窗口。
