@@ -43,6 +43,7 @@ enum CompanionAPIError: LocalizedError {
 
 struct BatonAPIClient: Sendable {
     private let session: URLSession
+    private let mediaSession: URLSession
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
@@ -59,6 +60,8 @@ struct BatonAPIClient: Sendable {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.urlCache = nil
         configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieStorage = nil
         return configuration
     }
 
@@ -70,7 +73,10 @@ struct BatonAPIClient: Sendable {
 
     /// Test callers may inject a URLSession. Production requests always use a
     /// session that refuses redirects, so credentials never follow a 3xx hop.
-    init(session: URLSession? = nil) { self.session = session ?? Self.protectedSession }
+    init(session: URLSession? = nil, mediaSession: URLSession? = nil) {
+        self.session = session ?? Self.protectedSession
+        self.mediaSession = mediaSession ?? Self.mediaSession
+    }
 
     func createLocalPairing() async throws -> URL {
         let root = URL(string: "http://127.0.0.1:8787")!
@@ -83,7 +89,7 @@ struct BatonAPIClient: Sendable {
     func discover(pairingURL: URL) async throws -> PairingDocument {
         try validateURL(pairingURL)
         let document: PairingDocument = try await get(url: pairingURL)
-        guard ["baton/1.1", "baton/1.2"].contains(document.protocolVersion) else { throw CompanionAPIError.invalidResponse }
+        guard ["baton/1.1", "baton/1.2", "baton/1.3"].contains(document.protocolVersion) else { throw CompanionAPIError.invalidResponse }
         try validateSameOrigin(pairingURL, document.endpoints.join)
         try validateSameOrigin(pairingURL, document.endpoints.approval)
         try validateSameOrigin(pairingURL, document.endpoints.conversation)
@@ -142,7 +148,51 @@ struct BatonAPIClient: Sendable {
         )
     }
 
-    private func send(endpoint: URL, token: String, content: [MessageContent], clientMessageID: UUID) async throws -> ConversationMessage {
+    struct StagedImage: Decodable, Equatable { let mediaID: String; let mimeType: String; let width: Int; let height: Int; let byteSize: Int; let expiresAt: String
+        enum CodingKeys: String, CodingKey { case mediaID = "media_id", mimeType = "mime_type", width, height, byteSize = "byte_size", expiresAt = "expires_at" } }
+
+    func uploadImage(endpoint: URL, token: String, data: Data, mimeType: String, idempotencyKey: UUID) async throws -> StagedImage {
+        guard data.count <= BatonImageLimits.maximumBytes else { throw CompanionAPIError.invalidImage }
+        let url = endpoint.appending(path: "media")
+        try validateURL(url); try validateSameOrigin(endpoint, url)
+        let boundary = "Baton-" + UUID().uuidString
+        var body = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"photo\"\r\nContent-Type: \(mimeType)\r\n\r\n".utf8)
+        body.append(data); body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"; request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue(idempotencyKey.uuidString.lowercased(), forHTTPHeaderField: "Idempotency-Key")
+        request.httpBody = body
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        let (bytes, response) = try await mediaSession.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else { throw CompanionAPIError.invalidResponse }
+        var responseData = Data()
+        for try await byte in bytes.prefix(65_537) {
+            responseData.append(byte)
+            if responseData.count > 65_536 { throw CompanionAPIError.invalidResponse }
+        }
+        guard http.statusCode == 200 || http.statusCode == 201 else { throw decodeServerError(status: http.statusCode, data: responseData) }
+        guard http.value(forHTTPHeaderField: "Content-Type")?.lowercased().hasPrefix("application/json") == true else { throw CompanionAPIError.invalidResponse }
+        let staged = try decoder.decode(StagedImage.self, from: responseData)
+        let pixels = staged.width.multipliedReportingOverflow(by: staged.height)
+        guard !staged.mediaID.isEmpty,
+              staged.mimeType.lowercased() == mimeType.lowercased(),
+              BatonImageFormat.isSupported(staged.mimeType),
+              staged.width > 0, staged.height > 0, !pixels.overflow,
+              pixels.partialValue <= BatonImageLimits.maximumPixels,
+              staged.byteSize == data.count,
+              Self.rfc3339Date(staged.expiresAt)?.timeIntervalSinceNow ?? 0 > 0 else { throw CompanionAPIError.invalidResponse }
+        return staged
+    }
+
+    private static func rfc3339Date(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+
+    func send(endpoint: URL, token: String, content: [MessageContent], clientMessageID: UUID) async throws -> ConversationMessage {
         struct SendBody: Encodable {
             let clientMessageID: String
             let content: [MessageContent]
@@ -166,7 +216,7 @@ struct BatonAPIClient: Sendable {
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(image.mimeType, forHTTPHeaderField: "Accept")
-        let (bytes, response) = try await Self.mediaSession.bytes(for: request)
+        let (bytes, response) = try await mediaSession.bytes(for: request)
         guard let http = response as? HTTPURLResponse else { throw CompanionAPIError.invalidResponse }
         let isSuccess = (200...299).contains(http.statusCode)
         let byteLimit = isSuccess ? BatonImageLimits.maximumBytes : 32_768

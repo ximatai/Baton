@@ -106,13 +106,46 @@ use `--api-key-env` to name a different environment variable. The
 upstream call is intentionally non-streaming; this small fixture converts the
 completed response into normal Baton `message.delta` events. It therefore
 tests the iOS streaming UI without turning the fixture into an LLM gateway.
-For compatibility with the configured local model, it forwards only the latest
+`LM_STUDIO_KEY` is read only from the process environment; do not place it in
+commands, source files, fixture data, or logs.
+
+## Optional V1.3 static-image fixture
+
+The default fixture remains a `baton/1.2` service. Start it with `--vision` to
+advertise `baton/1.3` plus the narrow `image_upload` capability. This enables
+only explicit JPEG/PNG/WebP photo staging and atomic `image_ref` commit; it
+does not enable camera, files, video, or external URLs. Install
+`requirements-media.txt` for Pillow, which the fixture uses to fully decode
+and validate static image bytes. The normal fixture needs no Pillow dependency.
+
+```bash
+python3 -m pip install -r mock_server/requirements-media.txt
+python3 mock_server/mock_server.py --port 8788 --vision
+python3 mock_server/media_unit_test.py
+python3 mock_server/media_smoke_test.py http://127.0.0.1:8788
+```
+
+Use `--vision` together with the optional OpenAI-compatible settings only when
+the selected model endpoint has been independently verified to accept
+OpenAI-style `image_url` data URLs. The flag is explicit so a loaded model name
+or reachable endpoint can never silently claim image support.
+Without `--vision`, the fixture preserves its compatibility behavior and forwards only the latest
 user turn; multi-turn Agent context remains the real Java service's job.
+With `--vision`, each accepted run freezes up to eight recent messages with a
+32,000-character and 16 MiB image-byte resource budget; older complete turns
+are omitted first, while an oversized current image message fails before a run
+is created. These are fixture resource limits, not a model token budget.
 `--openai-reasoning-effort` is optional and only useful for providers that
 understand it; omitting it preserves generic OpenAI-compatible behavior.
 If the provider fails, the app receives `message.failed`, followed by
 `run.completed` with `status: "failed"`, using a generic retryable error and
 never exposing provider response details.
+
+An earlier second-round local integration run used LM Studio `qwen3.8-27b` and
+covered single-image, multi-image, follow-up, and fixture text-plus-image
+sends. It is historical integration evidence only. Current automated closeout
+has completed; physical-device acceptance remains required for photo selection,
+backgrounding, and file protection.
 
 ## Pair, approve in the browser, and call the conversation API
 

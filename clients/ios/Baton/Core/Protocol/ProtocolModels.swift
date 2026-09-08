@@ -23,15 +23,17 @@ struct BatonCapabilities: Codable, Equatable {
     /// explicitly advertised support during pairing. This remains a server
     /// declaration, not permission for arbitrary client-side actions.
     let selection: Bool
+    let imageUpload: ImageUploadPolicy?
 
     enum CodingKeys: String, CodingKey {
         case text, markdown, streaming, image
         case contentAppend = "content_append"
         case conversationEnd = "conversation_end"
         case selection
+        case imageUpload = "image_upload"
     }
 
-    init(text: Bool = true, markdown: Bool = false, streaming: Bool = false, image: Bool = false, contentAppend: Bool = false, conversationEnd: Bool = false, selection: Bool = false) {
+    init(text: Bool = true, markdown: Bool = false, streaming: Bool = false, image: Bool = false, contentAppend: Bool = false, conversationEnd: Bool = false, selection: Bool = false, imageUpload: ImageUploadPolicy? = nil) {
         self.text = text
         self.markdown = markdown
         self.streaming = streaming
@@ -39,6 +41,7 @@ struct BatonCapabilities: Codable, Equatable {
         self.contentAppend = contentAppend
         self.conversationEnd = conversationEnd
         self.selection = selection
+        self.imageUpload = imageUpload
     }
 
     init(from decoder: Decoder) throws {
@@ -50,7 +53,18 @@ struct BatonCapabilities: Codable, Equatable {
         contentAppend = try container.decodeIfPresent(Bool.self, forKey: .contentAppend) ?? false
         conversationEnd = try container.decodeIfPresent(Bool.self, forKey: .conversationEnd) ?? false
         selection = try container.decodeIfPresent(Bool.self, forKey: .selection) ?? false
+        let proposedUpload = try container.decodeIfPresent(ImageUploadPolicy.self, forKey: .imageUpload)
+        imageUpload = image && proposedUpload?.isValid == true ? proposedUpload : nil
     }
+}
+
+struct ImageUploadPolicy: Codable, Equatable {
+    let maxItemsPerMessage: Int
+    let maxBytesPerItem: Int
+    let maxPixelsPerItem: Int
+    let mimeTypes: [String]
+    enum CodingKeys: String, CodingKey { case maxItemsPerMessage = "max_items_per_message", maxBytesPerItem = "max_bytes_per_item", maxPixelsPerItem = "max_pixels_per_item", mimeTypes = "mime_types" }
+    var isValid: Bool { (1...4).contains(maxItemsPerMessage) && (1...BatonImageLimits.maximumBytes).contains(maxBytesPerItem) && (1...BatonImageLimits.maximumPixels).contains(maxPixelsPerItem) && !mimeTypes.isEmpty && Set(mimeTypes).isSubset(of: BatonImageFormat.supportedMIMETypes) }
 }
 
 /// A per-device declaration submitted while joining. It only tells the
@@ -116,8 +130,10 @@ struct PairingDocument: Codable, Equatable {
     /// V1.1 services may reject unknown JSON fields. Only a V1.2 service that
     /// explicitly declares selection support receives the optional join hint.
     var supportsSelectionCapabilityNegotiation: Bool {
-        protocolVersion == "baton/1.2" && capabilities.selection
+        ["baton/1.2", "baton/1.3"].contains(protocolVersion) && capabilities.selection
     }
+
+    var imageUploadPolicy: ImageUploadPolicy? { protocolVersion == "baton/1.3" ? capabilities.imageUpload : nil }
 }
 
 /// `mediaID` is the stable, service-owned identity of an immutable media
@@ -244,6 +260,7 @@ struct SelectionInteractionState: Codable, Equatable, Identifiable {
 enum MessageContent: Codable, Equatable {
     case text(String)
     case image(MessageImage)
+    case imageReference(String)
     case selection(MessageSelection)
     case selectionResponse(SelectionResponse)
     case unsupported(type: String, alt: String?)
@@ -268,6 +285,10 @@ enum MessageContent: Codable, Equatable {
                 return
             }
             self = .image(image)
+        case "image_ref":
+            // image_ref is a write-only client input. A snapshot must carry a
+            // fully authenticated image rendition, never an unconfirmed ref.
+            self = .unsupported(type: type, alt: nil)
         case "selection":
             guard let selection = try? MessageSelection(from: decoder), selection.isPlausible else {
                 self = .unsupported(type: type, alt: nil)
@@ -299,6 +320,9 @@ enum MessageContent: Codable, Equatable {
             try container.encode(image.width, forKey: .width)
             try container.encode(image.height, forKey: .height)
             try container.encode(image.alt, forKey: .alt)
+        case let .imageReference(mediaID):
+            try container.encode("image_ref", forKey: .type)
+            try container.encode(mediaID, forKey: .mediaID)
         case let .selection(selection):
             try container.encode("selection", forKey: .type)
             try selection.encode(to: encoder)

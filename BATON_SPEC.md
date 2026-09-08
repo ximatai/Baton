@@ -1,7 +1,7 @@
-# Baton Companion Profile 1.1
+# Baton Companion Profile 1.3
 
 > **受众：计划让 Web/Agent 服务接入 Baton 的服务端、Web 与移动端实现者。**
-> 本文是 V1.1 的对外协议契约；产品介绍见 `README.md`，仓库内部编码约定见 `AGENTS.md`。
+> 本文是 V1.3 的对外协议契约；产品介绍见 `README.md`，仓库内部编码约定见 `AGENTS.md`。V1.1/1.2 的既有互操作语义仍在本文保留。
 
 ## Product definition
 
@@ -10,14 +10,15 @@ Baton are equal clients of one server-owned conversation.  Baton is not a
 browser mirror and does not know how an agent, model, or business system is
 implemented.
 
-The V1.1 experience is deliberately narrow:
+The V1.3 experience is deliberately narrow:
 
 1. A web application creates a short-lived pairing session and renders its QR
    code.
 2. The user scans it in Baton and joins that exact conversation.
 3. Both clients receive the same message history and real-time updates.
-4. The user dictates locally on iPhone, edits the resulting text, and sends it
-   as a normal conversation message.
+4. The user optionally selects up to the service-declared number of static
+   photos from the iPhone photo library, optionally dictates locally, edits the
+   text, and explicitly sends one normal conversation message.
 
 The server is the only source of truth.  No conversation data passes directly
 between the browser and the phone.
@@ -31,11 +32,15 @@ between the browser and the phone.
 ## Scope
 
 Included: QR pairing, text and Markdown messages, authenticated display of
-server-hosted static images, history, streaming output, stop generation,
-reconnect/resume, and on-device speech-to-text.
+server-hosted static images, service-declared static-image upload from the iOS
+photo library, history, streaming output, stop generation, reconnect/resume,
+and on-device speech-to-text.
 
-Explicitly deferred: image/camera/file input, **Agent action approvals** (HITL),
-tool UI, generated UI, location, Face ID confirmation, and push notification.
+Explicitly deferred: camera input, file input, video, arbitrary external-URL
+input, **Agent action approvals** (HITL), tool UI, generated UI, location, Face
+ID confirmation, and push notification. V1.3 image input is deliberately only
+an explicit photo-library selection of static images; it is not a generic file
+or media channel.
 Device pairing is different from an Agent approval feature: V1.1 supports a
 server-controlled `manual` or `auto` pairing policy. The data and event shapes
 remain extensible for the deferred capabilities.
@@ -164,7 +169,7 @@ app render a trustworthy pending-connection screen and submit a join request.
 
 ```json
 {
-  "protocol": "baton/1.2",
+  "protocol": "baton/1.3",
   "pairing_id": "ps_7KDX23",
   "expires_at": "2026-08-26T10:31:00Z",
   "service": { "id": "acme-erp", "name": "Acme ERP", "icon_url": "https://agent.example.com/icon.png" },
@@ -175,7 +180,21 @@ app render a trustworthy pending-connection screen and submit a join request.
     "approval": "https://agent.example.com/v1/baton/pairings/ps_7KDX23/approval",
     "conversation": "https://agent.example.com/v1/baton/conversations/conv_01J..."
   },
-  "capabilities": { "text": true, "markdown": true, "streaming": true, "image": true, "content_append": true, "conversation_end": false, "selection": true }
+  "capabilities": {
+    "text": true,
+    "markdown": true,
+    "streaming": true,
+    "image": true,
+    "content_append": true,
+    "conversation_end": false,
+    "selection": true,
+    "image_upload": {
+      "max_items_per_message": 4,
+      "max_bytes_per_item": 12582912,
+      "max_pixels_per_item": 25000000,
+      "mime_types": ["image/jpeg", "image/png", "image/webp"]
+    }
+  }
 }
 ```
 
@@ -188,13 +207,35 @@ discovery declaration** in V1.1, not a negotiation exchange: `text` is required
 and must be `true`; `markdown`, `streaming`, `image`, and `content_append` declare optional server
 behavior. `image: true` means the server may emit the read-only `image` content
 item below; `content_append: true` means it may emit the persisted append event
-defined below. These are declarations, not negotiation: neither authorizes
-image upload or access to arbitrary URLs. `conversation_end` defaults to `false`;
+defined below. These are declarations, not negotiation: neither grants access
+to arbitrary URLs. `conversation_end` defaults to `false`;
 only `true` declares that Baton may invoke the shared Conversation's `:end`
 operation. Clients must not expose an End control when it is absent or false;
 the server remains responsible for authorization.
-A client may safely ignore an unknown key. Remote icon URLs are optional and
+A client may safely ignore an unknown key. `image_upload` is absent unless the
+service accepts V1.3 staged image uploads; it has no implied default and
+requires `image: true`. `mime_types` must be a non-empty subset of
+`image/jpeg`, `image/png`, and `image/webp`; all numeric limits must be
+positive, `max_items_per_message` must be at most 4, and the byte/pixel limits
+must not exceed 12 MiB/25,000,000 pixels. A client must not upload if the
+object is absent, malformed, or exceeded. The service must enforce every
+declared limit and may enforce stricter policy at upload or message-commit
+time. `image` remains read-only server-to-client image display; it does not
+imply `image_upload`. Remote icon URLs are optional and
 should be fetched as untrusted content.
+
+### Profile-version compatibility
+
+A V1.3-capable client accepts discovery documents labelled `baton/1.1`,
+`baton/1.2`, or `baton/1.3`. It sends the unchanged V1.1 join body to 1.1,
+retains the V1.2 `selection_interaction` declaration when the selection rules
+below permit it, and uses image upload only for an explicit 1.3
+`image_upload` declaration. A V1.1 or V1.2 App is allowed to reject a
+`baton/1.3` discovery document; it cannot be made compatible by silently
+ignoring the new capability. Services that must support installed older Apps
+therefore expose a 1.1/1.2 pairing discovery profile for those QR flows, or
+require the App upgrade before issuing a 1.3 QR. The profile chosen for a
+pairing is service policy, not client negotiation.
 
 ## Conversation HTTP API
 
@@ -254,6 +295,7 @@ authenticated web page.
 | Operation | Endpoint | Purpose |
 | --- | --- | --- |
 | Snapshot | `GET /v1/baton/conversations/{id}` | Conversation metadata, bounded initial history, live runs, and an atomic resumable event cursor |
+| Upload image | `POST /v1/baton/conversations/{id}/media` | Idempotently stages one explicit photo-library image; never creates a message or run |
 | Send | `POST /v1/baton/conversations/{id}/messages` | Idempotently creates a user message |
 | Read media | `GET` URL carried by an `image` content item | Authenticated static image bytes |
 | Events | `GET /v1/baton/conversations/{id}/events` | SSE stream; supports `Last-Event-ID` |
@@ -262,7 +304,115 @@ authenticated web page.
 | Disconnect | `DELETE /v1/baton/devices/{deviceId}/sessions/{id}` | Revokes this conversation session |
 
 Every client-created message carries a UUID `client_message_id`; retries with
-the same value must return the originally created server message.
+the same value must return the originally created server message. V1.3 adds an
+`image_ref` content item only when the service declared `image_upload`; the
+message endpoint atomically turns each accepted reference into the ordinary,
+complete read-only `image` item defined below. Thus snapshots, SSE, Web, and
+iOS all observe the same persisted message, not an upload-side placeholder.
+
+### Staged image upload and commit (V1.3)
+
+V1.3 permits a paired iOS client to stage one static image with
+`POST /v1/baton/conversations/{id}/media`. The request uses the Conversation
+Bearer token, exact same origin, no redirects, `multipart/form-data`, a single
+`file` part, and `Idempotency-Key: <UUID>`. The file part is the selected image
+bytes; filenames, local paths, photo-library identifiers, EXIF location, and
+other client metadata are neither required nor authoritative. The client sends
+nothing until the user explicitly presses Send. It does not upload in the
+background, queue a retry after suspension/relaunch, or auto-send a staged
+draft.
+
+The service first enforces the declared item count/byte/pixel/MIME policy, then
+fully decodes the received bytes with a hardened image decoder. Magic bytes,
+declared MIME, extension, and multipart headers alone are insufficient. It
+must reject malformed, animated, decompression-bomb, dimension-mismatched, or
+otherwise non-static input, and derive the stored MIME, dimensions, and byte
+count from the validated decode. The V1.3 ceiling is 12 MiB and 25,000,000
+decoded pixels per item; a service declares equal or lower limits in
+`image_upload`. JPEG, PNG, and WebP are the only V1.3 media types.
+
+On first success, the service stores a private **staged** object scoped to the
+Conversation and authenticated device session and returns `201`:
+
+```json
+{
+  "media_id": "med_01J...",
+  "mime_type": "image/jpeg",
+  "width": 1600,
+  "height": 900,
+  "byte_size": 483920,
+  "expires_at": "2026-08-26T11:02:12Z"
+}
+```
+
+`media_id` is opaque and does not grant retrieval. It is usable only by the
+same unrevoked device session, in that Conversation, before `expires_at`.
+The recommended staging TTL is 30 minutes. Upload idempotency keys are scoped
+at least to that device session and Conversation. A retry with the same
+`Idempotency-Key` and identical validated payload returns `200` and the first
+response only while that staged object remains usable. After expiry it returns
+`410 media_expired`, never a stale successful response; the client uses a new
+upload UUID to transmit the selection again. The same key with different bytes
+or material request attributes returns `409 idempotency_key_conflict`; it must
+never replace the prior object.
+An upload produces no message, SSE envelope, model call, or Agent run.
+
+The normal messages request may contain ordered text and staged references,
+including an image-only message:
+
+```json
+{
+  "client_message_id": "11EF7D8E-...",
+  "content": [
+    { "type": "text", "text": "这张图的异常在哪里？" },
+    { "type": "image_ref", "media_id": "med_01J..." }
+  ]
+}
+```
+
+Within the same Conversation transaction that claims `client_message_id`, the
+service first authenticates the current call, then checks whether that message
+id already has a successful committed payload. This idempotency lookup precedes
+media validation: an identical retry returns the original message without
+requiring its staged objects to remain available, while a changed payload
+returns `409 idempotency_key_conflict`. For a new id, the service validates that
+every reference is distinct, belongs to that device session and Conversation,
+is staged and unexpired, and fits the declared per-message limit. It consumes
+those staged objects and persists one completed user message whose corresponding
+entries are full immutable `image` items (including the authenticated same-
+origin read URL and decoder-derived metadata). The usual `201`/`200` message
+idempotency response applies. Failed validation records no committed message
+fingerprint, creates neither a message nor a run, and consumes none of its
+references; that `client_message_id` may therefore be retried with newly
+uploaded references. Only the committed message may start the service's normal
+Agent processing.
+
+When a message response is lost, the client retries the exact original payload
+with the original `client_message_id` before uploading anything else. If that
+retry returns the committed result, it stops. Only an explicit, pre-commit
+`410 media_expired` permits re-uploading the selected image(s) with new upload
+UUIDs and retrying the uncommitted message id with the new references. It must
+not silently replace references or create a new message id while the original
+outcome is uncertain, because either can duplicate an Agent run.
+
+Typical upload errors are `400 invalid_media_request`, `413 media_too_large`,
+`415 unsupported_media_type`, `422 invalid_image_content`, `401 invalid_token`,
+`404 conversation_not_found`, and `410 conversation_closed`. Typical reference
+validation errors are `409 media_not_owned`, `410 media_expired`,
+`409 media_already_committed`, or `409 too_many_media_items`. Error bodies use
+the normal `{ "error": { "code", "message" } }` shape. A service may return
+`403` for an authenticated caller barred by its own media policy.
+
+Uncommitted staged objects are private temporary state: the service removes
+them at TTL expiry, on session revocation, and when a Conversation closes. A
+close transaction fences in-flight uploads and commits: neither may succeed
+after the close boundary. Committed media remains part of shared Conversation
+history under ordinary service retention; revoking one device deletes its
+temporary staging and local replica but never deletes shared committed history
+or media. The client keeps an unsubmitted selection only in its private,
+file-protected, backup-excluded temporary directory, clears it on explicit
+remove/send completion/session invalidation, and never stores credentials,
+proofs, or cookies there.
 
 ### Ending a shared conversation
 
@@ -470,13 +620,17 @@ Snapshots include `selection_states`, each containing `interaction_id`,
 `selection.cancelled` carry the same state object as persisted SSE envelopes.
 At most one `selection_required` interaction may be open per Conversation.
 
-Only when discovery is exactly `baton/1.2` and declares `selection: true`, the
+When discovery is `baton/1.2` or later and declares `selection: true`, the
 join body may declare
 `"client_capabilities":{"selection_interaction":true}`. It is a narrow
 per-device rendering declaration, not authorization. A service must issue a
 required selection only when its compatibility policy proves every affected
 device can complete it; otherwise it falls back to an ordinary text question.
-V1.1 clients and servers remain valid without selection support.
+V1.1 clients and servers remain valid without selection support. A server must
+also apply the required-selection rule to every V1.3 message shape: open
+`selection_required` rejects text, `image_ref`, or any mixed payload with
+`409 selection_required`. A valid `selection_response` remains the only
+accepted answer and must not carry image references.
 
 ### Required event envelope
 
@@ -542,7 +696,8 @@ only when the service permits Baton to invoke End for the shared Conversation.
 A missing or false value means the client must not show an End operation; the
 server still enforces authorization.
 
-V1.2 defines one narrow exception: when discovery is exactly `baton/1.2` and
+V1.2 defines one narrow exception, retained by V1.3: when discovery is
+`baton/1.2` or later and
 declares `selection: true`, Baton may include
 `client_capabilities.selection_interaction: true` in its join body. V1.1
 services, and V1.2 services without that declaration, receive the unchanged
@@ -550,8 +705,13 @@ V1.1 join body. This per-device rendering declaration is not authorization; the
 service applies its compatibility policy before it creates a required
 selection.
 
-All other bidirectional or per-device capabilities, and future keys such as
-`camera`, `file`, `approval`, `location`, and `notification`, remain deferred.
+V1.3 adds `image_upload` as the one further bidirectional capability. It is a
+service policy declaration, not a photo-library permission grant; the iOS App
+separately asks iOS for user-selected photos. It follows the staged lifecycle
+above and must never be inferred from a model name or the presence of a media
+endpoint. All other bidirectional or per-device capabilities, and future keys
+such as `camera`, `file`, `video`, `external_url`, `approval`, `location`, and
+`notification`, remain deferred.
 A future version must define their lifecycle and fallback semantics rather than
 treating unknown keys as negotiated support.
 
@@ -564,5 +724,9 @@ treating unknown keys as negotiated support.
 - Image `media_id` remains stable between snapshot and replayed append events;
   an appended image remains part of the target message in every later snapshot.
 - Repeating a send request cannot create a duplicate user message.
+- An explicit photo upload creates no message/run; an image-only or text-plus-
+  image send atomically commits only the caller's unexpired staged media.
+- A required selection rejects image references just as it rejects ordinary
+  text, so attachments cannot bypass a service-required choice.
 - Revoking the mobile device immediately prevents future access.
 - No microphone audio is uploaded by Baton for V1.1 transcription.

@@ -73,6 +73,8 @@ private struct MessageContentStack: View {
                                 )
                             }
                         }
+                    case .imageReference:
+                        EmptyView()
                     case let .selection(selection):
                         SelectionCard(
                             selection: selection,

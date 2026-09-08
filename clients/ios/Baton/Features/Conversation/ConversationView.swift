@@ -6,6 +6,9 @@ struct ConversationView: View {
     @State private var voiceVerticalDrag: CGFloat = 0
     @State private var isVoiceLongPressActive = false
     @State private var selectionScrollTask: Task<Void, Never>?
+    @State private var isPhotoPickerPresented = false
+    @State private var photoImportLease = UUID()
+    @State private var previewImage: UIImage?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -50,7 +53,7 @@ struct ConversationView: View {
                 }
             }
             if let error = model.errorMessage {
-                ErrorNotice(text: error, retry: { model.reconnect() })
+                ErrorNotice(text: error, retry: model.isMessageOutcomeUnknown ? { model.retryUnknownMessage() } : { model.reconnect() })
             }
             Divider().opacity(0.6)
             VStack(alignment: .leading, spacing: 6) {
@@ -77,6 +80,13 @@ struct ConversationView: View {
                         .padding(.horizontal, 4)
                 }
                 HStack(alignment: .center, spacing: 10) {
+                    if model.imageUploadLimit > 0 {
+                        Button {
+                            photoImportLease = model.beginPhotoImport()
+                            isPhotoPickerPresented = true
+                        } label: { Image(systemName: "photo") }
+                            .disabled(model.isComposerDisabled)
+                    }
                     ZStack(alignment: .leading) {
                         if composerPlaceholder != nil {
                             voiceInputPlaceholder
@@ -131,7 +141,11 @@ struct ConversationView: View {
                         }
                     }
                     .disabled(model.isComposerDisabled)
-                    if let runID = model.activeRunID {
+                    if model.isMessageOutcomeUnknown {
+                        Button("重试确认发送结果") { model.retryUnknownMessage() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!model.isConnected || model.isSendingMessage)
+                    } else if let runID = model.activeRunID {
                         Button { model.cancel(runID: runID) } label: { Image(systemName: "stop.fill").frame(width: 22, height: 22) }
                             .buttonStyle(.bordered)
                             .tint(.orange)
@@ -143,11 +157,43 @@ struct ConversationView: View {
                             .disabled(!model.canSend)
                             .accessibilityLabel("发送")
                     }
+                    if model.isSendingMessage {
+                        Button { model.cancelImageSend() } label: { Image(systemName: "xmark").frame(width: 22, height: 22) }
+                            .buttonStyle(.bordered)
+                            .tint(.orange)
+                            .accessibilityLabel("取消图片发送")
+                    }
+                }
+                if let progress = model.imageSendProgress {
+                    Text(progress).font(.footnote).foregroundStyle(.secondary).padding(.horizontal, 4)
+                }
+                if model.selectedImageCount > 0 {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(model.selectedImageDrafts) { draft in
+                                if let data = model.selectedImageData(draft), let image = UIImage(data: data) {
+                                    ZStack(alignment: .topTrailing) {
+                                        Image(uiImage: image).resizable().scaledToFill().frame(width: 58, height: 58).clipShape(RoundedRectangle(cornerRadius: 8))
+                                            .onTapGesture { previewImage = image }
+                                        Button { model.removeSelectedPhoto(id: draft.id) } label: { Image(systemName: "xmark.circle.fill").symbolRenderingMode(.palette).foregroundStyle(.white, .black.opacity(0.5)) }
+                                            .disabled(model.isSendingMessage || model.isImportingImages || model.isMessageOutcomeUnknown)
+                                    }
+                                }
+                            }
+                            Button("移除全部") { model.removeSelectedPhotos() }.font(.footnote).disabled(model.isSendingMessage || model.isImportingImages || model.isMessageOutcomeUnknown)
+                        }
+                    }
                 }
             }
             .frame(maxWidth: 680)
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
+            .sheet(isPresented: $isPhotoPickerPresented) {
+                BatonPhotoPicker(limit: model.imageUploadLimit) { data in model.acceptSelectedPhotos(data, lease: photoImportLease) }
+            }
+            .sheet(item: Binding(get: { previewImage.map(PreviewImage.init) }, set: { previewImage = $0?.image })) { preview in
+                Image(uiImage: preview.image).resizable().scaledToFit().padding().background(.black)
+            }
             .frame(maxWidth: .infinity)
             .background(.bar)
         }
@@ -246,3 +292,5 @@ struct ConversationView: View {
         proxy.scrollTo(last.id, anchor: .bottom)
     }
 }
+
+private struct PreviewImage: Identifiable { let image: UIImage; let id = UUID() }

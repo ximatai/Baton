@@ -6,7 +6,7 @@
 ## 边界
 
 - Baton 是服务端 Conversation 的 iOS Companion，不是浏览器镜像；服务端是唯一事实源。
-- V1.1 只做配对、文本/Markdown、服务端受控静态图片展示、SSE、取消/重连和本地语音转文字；不做图片/相机/文件输入。
+- V1.3 做配对、文本/Markdown、服务端受控静态图片展示、SSE、取消/重连、本地语音转文字，以及服务声明后由 iOS 相册显式选择的静态图片输入；不做相机、文件、视频或任意外链输入。
 - 协议以 `BATON_SPEC.md` 为准；Java 接入以 `JAVA_INTEGRATION.md` 为准。改 API、SSE、pairing 或凭据生命周期时同步检查这两份文档和 `mock_server/smoke_test.py`。
 
 ## 代码结构
@@ -22,7 +22,7 @@ clients/ios/Baton: App → Features → Core → Apple frameworks / URLSession /
 - `Core/Conversation` 是纯 reducer；不得依赖 SwiftUI、Keychain 或网络。
 - 凭据与 proof 只能放 Keychain。
 - QR 扫描器只返回 URL；Speech service 只负责听写；View 不直接访问 Keychain/API。
-- 图片仅由 `Core/Protocol` 以同源 Bearer 请求；禁止重定向和 URLSession/URLCache 持久化。已配对 Conversation 的已确认快照与已下载媒体可按 `media_id` 存入 App 私有、文件保护且不参与备份的会话副本；移除配对、凭据失效或会话撤销时必须删除该副本。凭据、proof 与 Cookie 绝不进入该目录。
+- 图片读取与上传仅由 `Core/Protocol` 处理，并以同源 Bearer 请求；禁止重定向和 URLSession/URLCache 持久化。上传只在用户显式发送时进行，遵循服务声明的 `image_upload` 限制，先暂存、再以 `image_ref` 原子提交；不得后台补发或自动发送。未提交图片只能放 App 私有、文件保护且不参与备份的临时目录，并在发送完成、移除、凭据失效或会话撤销时清理。已配对 Conversation 的已确认快照与已下载媒体可按 `media_id` 存入同等保护的会话副本；移除配对、凭据失效或会话撤销时必须删除该副本。凭据、proof 与 Cookie 绝不进入这些目录。
 - 当前单一 `BatonViewModel` 是 V1 协调器。不要提前引入 TCA、多模块、SwiftData 或 DI 框架。
 
 ## 安全

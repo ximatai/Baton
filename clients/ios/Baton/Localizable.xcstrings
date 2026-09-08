@@ -14,6 +14,46 @@
         }
       }
     },
+    "取消图片发送" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel image send"
+          }
+        }
+      }
+    },
+    "发送结果未确认。请重试确认发送结果。" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The send result is unknown. Retry to confirm it." } }
+      }
+    },
+    "重试确认发送结果" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Retry to confirm send" } }
+      }
+    },
+    "正在上传图片 %d/%d…" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Uploading image %d/%d…" } }
+      }
+    },
+    "正在上传图片…" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Uploading image…" } }
+      }
+    },
+    "正在发送消息…" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sending message…" } }
+      }
+    },
+    "移除全部" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove all" } }
+      }
+    },
     "Baton" : {
       "localizations" : {
         "en" : {

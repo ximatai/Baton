@@ -6,6 +6,7 @@ private struct ConversationRoute: Hashable {
 }
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var model = BatonViewModel()
     @State private var isEndConfirmationPresented = false
     @State private var isShowingScanner = false
@@ -92,6 +93,11 @@ struct ContentView: View {
         }
         .onChange(of: navigationPath) { _, path in
             if path.isEmpty {
+                model.suspendActiveConversation()
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .background {
                 model.suspendActiveConversation()
             }
         }
