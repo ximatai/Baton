@@ -111,6 +111,10 @@ commands, source files, fixture data, or logs.
 
 ## Optional V1.3 static-image fixture
 
+For normal chat testing, add `--no-reply-demo-image` to omit the fixed demo image
+automatically appended to each assistant reply. This leaves the welcome image,
+image uploads, and model vision input unchanged. Omit the flag to restore the demo.
+
 The default fixture remains a `baton/1.2` service. Start it with `--vision` to
 advertise `baton/1.3` plus the narrow `image_upload` capability. This enables
 only explicit JPEG/PNG/WebP photo staging and atomic `image_ref` commit; it

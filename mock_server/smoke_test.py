@@ -198,6 +198,15 @@ with urllib.request.urlopen(image_request, timeout=3) as image_response:
 assert image_response.headers.get("Cache-Control") == "private, no-store"
 assert image_bytes.startswith(b"\x89PNG\r\n\x1a\n") and len(image_bytes) < 12 * 1024 * 1024
 
+# The fixture Web client uses its own intentionally unauthenticated resolver.
+# It must render the fixed server-owned welcome asset without broadening the
+# resolver to staged uploads or external URLs.
+web_image_request = urllib.request.Request("/".join([BASE.rstrip("/"), "v1/baton/mock/web/media", welcome_image["media_id"]]))
+with urllib.request.urlopen(web_image_request, timeout=3) as web_image_response:
+    web_image_bytes = web_image_response.read()
+    assert web_image_response.status == 200 and web_image_response.headers.get_content_type() == "image/png"
+assert web_image_bytes == image_bytes
+
 # Selection interactions are persisted conversation state. A required
 # confirmation blocks text on the server, but a structured confirm response
 # resolves it exactly once and is replayable to every device.

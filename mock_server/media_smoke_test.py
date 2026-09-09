@@ -56,6 +56,10 @@ path = "/v1/baton/conversations/" + conversation
 key, one = str(uuid.uuid4()), image_bytes("red")
 status, staged = request(path + "/media", "POST", *multipart(one, token, key))
 assert status == 201
+# The fixture Web resolver is public only for committed conversation media;
+# a staged upload cannot be previewed before its atomic message commit.
+status, staged_web = request("/v1/baton/mock/web/media/" + staged["media_id"])
+assert status == 404 and staged_web["error"]["code"] == "media_not_found"
 status, retry = request(path + "/media", "POST", *multipart(one, token, key))
 assert status == 200 and retry == staged
 status, conflict = request(path + "/media", "POST", *multipart(image_bytes("blue"), token, key))

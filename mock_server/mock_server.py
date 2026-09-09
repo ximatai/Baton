@@ -64,7 +64,8 @@ MODEL_IMAGE_BYTES_LIMIT = 16 * 1024 * 1024
 
 
 class Store:
-    def __init__(self, base_url, *, event_retention=64):
+    def __init__(self, base_url, *, event_retention=64, reply_demo_image=True):
+        self.reply_demo_image = reply_demo_image
         self.base_url, self.lock = base_url.rstrip("/"), threading.RLock()
         self.condition = threading.Condition(self.lock)
         self.pairings, self.tokens, self.events = {}, {}, []
@@ -1082,7 +1083,7 @@ create();
             message = next(item for item in STORE.messages if item["id"] == message_id)
             message["status"] = "completed"
             STORE.event("message.completed", {"message_id": message_id, "status": "completed"})
-            if STORE.fixture_media_enabled:
+            if STORE.fixture_media_enabled and STORE.reply_demo_image:
                 appended = [{"type": "image", "media_id": DEMO_IMAGE_ID,
                              "url": STORE.base_url + DEMO_IMAGE_PATH, "mime_type": "image/png",
                              "width": 320, "height": 200, "alt": DEMO_IMAGE_ALT}]
@@ -1132,6 +1133,12 @@ create();
         if path == "/v1/baton/mock/web/events": return self.sse()
         if path.startswith("/v1/baton/mock/web/media/"):
             media_id = path.rsplit("/", 1)[-1]
+            # The local Web client renders the fixture's server-owned welcome
+            # image through this unauthenticated fixture-only route. Keep the
+            # exception limited to that fixed asset; uploads still require an
+            # atomic message commit before their bytes can be resolved here.
+            if media_id == DEMO_IMAGE_ID:
+                return self.send_media(DEMO_IMAGE_BYTES, "image/png")
             with STORE.lock:
                 media = STORE.staged_media.get(media_id)
                 # This fixture-only resolver exposes bytes only after an
@@ -1247,6 +1254,7 @@ def main():
     parser.add_argument("--model-warm-interval-seconds", type=int, default=600, help="minimum interval between optional model warm-up requests")
     parser.add_argument("--api-key-env", default="LM_STUDIO_KEY", help="environment variable holding the optional provider key")
     parser.add_argument("--vision", action="store_true", help="enable the explicit Baton/1.3 static-image upload fixture")
+    parser.add_argument("--no-reply-demo-image", action="store_true", help="omit the automatic demo image from assistant replies; image uploads remain available")
     args = parser.parse_args()
     if args.sse_live_seconds < 1:
         parser.error("--sse-live-seconds must be positive")
@@ -1275,7 +1283,8 @@ def main():
     SSE_LIVE_SECONDS = args.sse_live_seconds
     REVIEW_DEMO_TOKEN = args.review_demo_token
     REVIEW_ACTION_TOKEN = secrets.token_urlsafe(24) if REVIEW_DEMO_TOKEN else None
-    STORE = Store(args.public_base_url or f"http://{args.host}:{args.port}", event_retention=args.event_retention)
+    STORE = Store(args.public_base_url or f"http://{args.host}:{args.port}", event_retention=args.event_retention,
+                  reply_demo_image=not args.no_reply_demo_image)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     provider = f" with OpenAI-compatible model {args.openai_model}" if CHAT_COMPLETER else " with deterministic replies"
     print(f"Baton mock server listening at {STORE.base_url}{provider}", flush=True)
