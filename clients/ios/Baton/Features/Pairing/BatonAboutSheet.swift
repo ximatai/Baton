@@ -4,6 +4,13 @@ import SwiftUI
 /// remain in the linked README so this sheet stays useful at the moment of scan.
 struct BatonAboutSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @State private var releaseNoteToPresent: ReleaseNote?
+    @State private var lastPresentedReleaseNote: ReleaseNote?
+    private let releaseNotesManager: ReleaseNotesManager
+
+    init(releaseNotesManager: ReleaseNotesManager = .shared) {
+        self.releaseNotesManager = releaseNotesManager
+    }
 
     var body: some View {
         NavigationStack {
@@ -11,6 +18,7 @@ struct BatonAboutSheet: View {
                 VStack(alignment: .leading, spacing: 26) {
                     intro
                     startSteps
+                    releaseNotesLink
                     documentationLink
                 }
                 .frame(maxWidth: 560, alignment: .leading)
@@ -24,6 +32,14 @@ struct BatonAboutSheet: View {
                     Button("完成") { dismiss() }
                 }
             }
+        }
+        .sheet(item: $releaseNoteToPresent, onDismiss: markPresentedReleaseNoteRead) { note in
+            ReleaseNoteView(note: note) {
+                releaseNoteToPresent = nil
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .interactiveDismissDisabled()
         }
     }
 
@@ -60,6 +76,24 @@ struct BatonAboutSheet: View {
             Label("了解 Baton 与接入方式", systemImage: "arrow.up.right.square")
                 .font(.subheadline.weight(.semibold))
         }
+    }
+
+    private var releaseNotesLink: some View {
+        Button {
+            let note = ReleaseNotesRegistry.current
+            lastPresentedReleaseNote = note
+            releaseNoteToPresent = note
+        } label: {
+            Label("查看版本更新", systemImage: "sparkles")
+                .font(.subheadline.weight(.semibold))
+        }
+    }
+
+    private func markPresentedReleaseNoteRead() {
+        if let note = lastPresentedReleaseNote {
+            releaseNotesManager.markRead(note)
+        }
+        lastPresentedReleaseNote = nil
     }
 }
 
