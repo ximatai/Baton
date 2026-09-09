@@ -51,6 +51,15 @@ final class BatonViewModel: ObservableObject {
     @Published private(set) var messages: [ConversationMessage] = []
     @Published private(set) var conversation: ConversationDescriptor?
     @Published var composerText = ""
+    @Published private(set) var selectedImageCount = 0
+    @Published private(set) var isImportingImages = false
+    private let imageDrafts: ImageDraftCoordinator
+    private var imageSendTask: Task<Void, Never>?
+    private var imageSendGeneration = UUID()
+    private var imageImportGeneration = UUID()
+    private var imageImportCredential: SessionCredential?
+    private var imageImportTask: Task<Void, Never>?
+    @Published private(set) var imageSendProgress: String?
     @Published private(set) var activeRunID: String?
     @Published private(set) var agentActivity: AgentActivity = .idle
     @Published private(set) var connectionStatus = String(localized: "尚未连接")
@@ -79,7 +88,7 @@ final class BatonViewModel: ObservableObject {
     @Published private(set) var imageLoader: BatonImageLoader?
     @Published private(set) var selectionStates: [String: SelectionInteractionState] = [:]
 
-    private let api = BatonAPIClient()
+    private let api: BatonAPIClient
     private let speechInput = SpeechInputService()
     private var credential: SessionCredential?
     private var composerBeforeVoiceInput: String?
@@ -99,7 +108,10 @@ final class BatonViewModel: ObservableObject {
     /// unchanged. It lets an explicit retry after an ambiguous response reuse
     /// the protocol's idempotency key without a durable queue.
     private var draftMessageText: String?
+    private var draftMessageIdentity: String?
     private var draftMessageID: UUID?
+    private var pendingUnknownMessage: (credential: SessionCredential, content: [MessageContent], id: UUID)?
+    @Published private(set) var isMessageOutcomeUnknown = false
     private var mediaPrefetchTask: Task<Void, Never>?
     private var cacheRestoreTask: Task<Void, Never>?
     /// A replica lease belongs to the active device session. Recreating this
@@ -120,11 +132,12 @@ final class BatonViewModel: ObservableObject {
         isConnected
             && credential != nil
             && activeRequiredSelection == nil
-            && !composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (!composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedImageCount > 0)
             && !isBusy
-            && !isSendingMessage
+            && !isImportingImages
+            && !isSendingMessage && !isMessageOutcomeUnknown
     }
-    var isComposerDisabled: Bool { !isConnected || isBusy || isSendingMessage || activeRequiredSelection != nil }
+    var isComposerDisabled: Bool { !isConnected || isBusy || isImportingImages || isSendingMessage || isMessageOutcomeUnknown || activeRequiredSelection != nil }
     var isSelectionRequired: Bool { activeRequiredSelection != nil }
     var composerUnavailableMessage: String? {
         guard credential != nil else { return String(localized: "此对话已不可用") }
@@ -142,6 +155,57 @@ final class BatonViewModel: ObservableObject {
     var isUnencryptedTransport: Bool {
         guard let endpoint = credential?.conversationEndpoint else { return false }
         return !BatonTransportPolicy.isEncrypted(endpoint)
+    }
+
+    var imageUploadLimit: Int { credential?.imageUploadPolicy?.maxItemsPerMessage ?? 0 }
+    var selectedImageDrafts: [ImageDraftCoordinator.Draft] { imageDrafts.drafts }
+    func selectedImageData(_ draft: ImageDraftCoordinator.Draft) -> Data? { try? imageDrafts.data(for: draft) }
+
+    func removeSelectedPhotos(force: Bool = false) {
+        guard force || (!isSendingMessage && !isMessageOutcomeUnknown) else { return }
+        imageDrafts.clear()
+        selectedImageCount = 0
+        draftMessageIdentity = nil
+    }
+
+    func removeSelectedPhoto(id: UUID) {
+        guard !isSendingMessage, !isImportingImages, !isMessageOutcomeUnknown else { return }
+        imageDrafts.remove(id: id)
+        selectedImageCount = imageDrafts.drafts.count
+        draftMessageIdentity = nil
+    }
+
+    /// Starts a picker import lease. Results from a dismissed picker are
+    /// ignored after this conversation changes or is suspended.
+    func beginPhotoImport() -> UUID {
+        guard !isMessageOutcomeUnknown else { return imageImportGeneration }
+        imageImportTask?.cancel()
+        imageImportGeneration = UUID()
+        imageImportCredential = credential
+        isImportingImages = true
+        return imageImportGeneration
+    }
+
+    func acceptSelectedPhotos(_ data: [Data], lease: UUID) {
+        guard lease == imageImportGeneration,
+              imageImportCredential == credential,
+              !Task.isCancelled,
+              let policy = credential?.imageUploadPolicy,
+              !isSendingMessage,
+              !isMessageOutcomeUnknown else { return }
+        guard !data.isEmpty else { isImportingImages = false; return }
+        imageImportTask = Task.detached { [weak self, data, policy] in
+            let normalized = Result { try ImageDraftCoordinator.normalizeImages(data, policy: policy) }
+            await MainActor.run {
+                guard let self, lease == self.imageImportGeneration, self.imageImportCredential == self.credential else { return }
+                self.isImportingImages = false
+                self.imageImportTask = nil
+                do {
+                    try self.imageDrafts.importNormalized(try normalized.get())
+                    self.selectedImageCount = self.imageDrafts.drafts.count
+                } catch { self.errorMessage = error.localizedDescription }
+            }
+        }
     }
     var isAutoApprovedPairing: Bool { pendingApprovalMode == .auto }
     var activeSessionID: String? { credential?.conversationKey }
@@ -165,7 +229,9 @@ final class BatonViewModel: ObservableObject {
             }
     }
 
-    init() {
+    init(api: BatonAPIClient = BatonAPIClient(), imageDrafts: ImageDraftCoordinator? = nil) {
+        self.api = api
+        self.imageDrafts = imageDrafts ?? ImageDraftCoordinator()
         KeychainStore.deleteRetiredOutbox()
         let key = "baton.device-id"
         if let stored = UserDefaults.standard.string(forKey: key) { deviceID = stored }
@@ -269,51 +335,198 @@ final class BatonViewModel: ObservableObject {
     }
 
     func send() {
+        if isMessageOutcomeUnknown { retryUnknownMessage(); return }
         let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard canSend, !text.isEmpty, let credential else { return }
-        if draftMessageText != text {
+        guard canSend, let credential else { return }
+        let frozenDrafts = imageDrafts.drafts
+        let identity = text + "\u{1F}" + frozenDrafts.map(\.id.uuidString).joined(separator: ",")
+        if draftMessageText != text || draftMessageIdentity != identity {
             draftMessageText = text
+            draftMessageIdentity = identity
             draftMessageID = UUID()
         }
         guard let clientMessageID = draftMessageID else { return }
         isSendingMessage = true
+        imageSendGeneration = UUID()
+        let sendGeneration = imageSendGeneration
         acceptsSpeechTranscript = false
         speechInput.discardTranscript()
-        Task { [weak self, api] in
+        imageSendProgress = frozenDrafts.isEmpty ? String(localized: "正在发送消息…") : String(localized: "正在上传图片…")
+        imageSendTask = Task { [weak self, api] in
+            var submittedContent: [MessageContent] = []
             defer {
-                if self?.credential == credential {
+                if self?.credential == credential, self?.imageSendGeneration == sendGeneration {
                     self?.isSendingMessage = false
+                    self?.imageSendTask = nil
+                    self?.imageSendProgress = nil
                 }
             }
             do {
-                let message = try await api.send(
-                    endpoint: credential.conversationEndpoint,
-                    token: credential.accessToken,
-                    text: text,
-                    clientMessageID: clientMessageID
-                )
-                guard self?.credential == credential else { return }
-                self?.merge(message)
-                self?.composerText = ""
-                self?.draftMessageText = nil
-                self?.draftMessageID = nil
-                self?.errorMessage = nil
-            } catch {
-                guard self?.credential == credential else { return }
                 guard let self else { return }
+                guard !Task.isCancelled, self.credential == credential, self.imageSendGeneration == sendGeneration else { return }
+                var expiryRetries = 0
+                let message: ConversationMessage
+                while true {
+                    var content: [MessageContent] = text.isEmpty ? [] : [.text(text)]
+                    do {
+                        if !frozenDrafts.isEmpty {
+                            guard let policy = credential.imageUploadPolicy else { throw CompanionAPIError.invalidResponse }
+                            for (index, initialDraft) in frozenDrafts.enumerated() {
+                                try Task.checkCancellation()
+                                guard self.acceptsImageSend(credential, generation: sendGeneration) else { return }
+                                guard let draft = self.imageDrafts.draft(id: initialDraft.id) else { return }
+                                self.imageSendProgress = String(format: String(localized: "正在上传图片 %d/%d…"), index + 1, frozenDrafts.count)
+                                if let mediaID = draft.stagedMediaID { content.append(.imageReference(mediaID)); continue }
+                                let bytes = try self.imageDrafts.data(for: draft)
+                                let staged = try await api.uploadImage(endpoint: credential.conversationEndpoint, token: credential.accessToken, data: bytes, mimeType: draft.mimeType, idempotencyKey: draft.uploadID)
+                                guard self.acceptsImageSend(credential, generation: sendGeneration) else { return }
+                                guard staged.byteSize <= policy.maxBytesPerItem, staged.width * staged.height <= policy.maxPixelsPerItem, policy.mimeTypes.contains(staged.mimeType) else { throw CompanionAPIError.invalidResponse }
+                                self.imageDrafts.markStaged(staged.mediaID, for: draft.id)
+                                content.append(.imageReference(staged.mediaID))
+                            }
+                        }
+                        guard self.acceptsImageSend(credential, generation: sendGeneration) else { return }
+                        self.imageSendProgress = String(localized: "正在发送消息…")
+                        submittedContent = content
+                        // Retain the immutable commit before starting I/O. A
+                        // cancellation can race a request that reached the
+                        // server, so it cannot make this draft editable again.
+                        self.pendingUnknownMessage = (credential, content, clientMessageID)
+                        message = try await api.send(endpoint: credential.conversationEndpoint, token: credential.accessToken, content: content, clientMessageID: clientMessageID)
+                        guard self.acceptsImageSend(credential, generation: sendGeneration) else { return }
+                        break
+                    } catch CompanionAPIError.server(let status, let code, _) where status == 410 && code == "media_expired" && expiryRetries == 0 {
+                        // A 410 is the server's explicit proof that no staged ref
+                        // was usable. Rebuild refs from the retained files while
+                        // preserving this message UUID; never do this for an
+                        // uncertain network/send outcome.
+                        expiryRetries += 1
+                        guard self.acceptsImageSend(credential, generation: sendGeneration) else { return }
+                        // The explicit 410 proves this particular commit did
+                        // not succeed. Do not let a later upload failure turn
+                        // its obsolete refs into an "unknown" message.
+                        submittedContent = []
+                        self.pendingUnknownMessage = nil
+                        self.imageDrafts.resetUploads()
+                        continue
+                    }
+                }
+                guard !Task.isCancelled, self.credential == credential, self.imageSendGeneration == sendGeneration else { return }
+                self.merge(message)
+                self.composerText = ""
+                self.draftMessageText = nil
+                self.draftMessageIdentity = nil
+                self.draftMessageID = nil
+                self.pendingUnknownMessage = nil
+                self.isMessageOutcomeUnknown = false
+                self.removeSelectedPhotos(force: true)
+                self.errorMessage = nil
+            } catch {
+                guard let self else { return }
+                guard self.credential == credential, self.imageSendGeneration == sendGeneration else { return }
                 if self.isConversationClosed(error) || self.isInvalidToken(error) {
                     self.discardTerminatedActiveSession(error, matching: credential)
-                } else {
+                } else if !submittedContent.isEmpty && (Task.isCancelled || self.isUnknownMessageOutcome(error)) {
+                    // The service may have committed this exact request. Keep
+                    // immutable content and UUID until the user confirms it.
+                    self.pendingUnknownMessage = (credential, submittedContent, clientMessageID)
+                    self.isMessageOutcomeUnknown = true
+                    self.errorMessage = String(localized: "发送结果未确认。请重试确认发送结果。")
+                } else if !Task.isCancelled, self.imageSendGeneration == sendGeneration {
+                    // A protocol-level 4xx is a definitive non-commit, so a
+                    // later explicit send must begin from a fresh local state.
+                    self.pendingUnknownMessage = nil
                     self.errorMessage = error.localizedDescription
                 }
             }
         }
     }
 
+    func retryUnknownMessage() {
+        guard isConnected,
+              let pending = pendingUnknownMessage,
+              pending.credential == credential,
+              !isSendingMessage else { return }
+        isSendingMessage = true
+        imageSendGeneration = UUID()
+        let sendGeneration = imageSendGeneration
+        imageSendProgress = String(localized: "正在发送消息…")
+        imageSendTask = Task { [weak self, api] in
+            defer {
+                if self?.credential == pending.credential, self?.imageSendGeneration == sendGeneration {
+                    self?.isSendingMessage = false; self?.imageSendTask = nil; self?.imageSendProgress = nil
+                }
+            }
+            do {
+                let message = try await api.send(endpoint: pending.credential.conversationEndpoint, token: pending.credential.accessToken, content: pending.content, clientMessageID: pending.id)
+                guard self?.acceptsImageSend(pending.credential, generation: sendGeneration) == true else { return }
+                self?.merge(message); self?.composerText = ""; self?.draftMessageText = nil; self?.draftMessageIdentity = nil; self?.draftMessageID = nil
+                self?.pendingUnknownMessage = nil; self?.isMessageOutcomeUnknown = false; self?.removeSelectedPhotos(force: true); self?.errorMessage = nil
+            } catch {
+                guard let self,
+                      self.credential == pending.credential,
+                      self.imageSendGeneration == sendGeneration else { return }
+                if self.isConversationClosed(error) || self.isInvalidToken(error) {
+                    self.discardTerminatedActiveSession(error, matching: pending.credential)
+                } else if case CompanionAPIError.server(let status, let code, _) = error,
+                          status == 410, code == "media_expired",
+                          self.acceptsImageSend(pending.credential, generation: sendGeneration) {
+                    self.imageDrafts.resetUploads()
+                    self.pendingUnknownMessage = nil
+                    self.isMessageOutcomeUnknown = false
+                    self.isSendingMessage = false
+                    self.imageSendTask = nil
+                    self.imageSendProgress = nil
+                    // send() retains draftMessageID, so the regenerated refs
+                    // are submitted with the original client_message_id.
+                    self.send()
+                } else if !Task.isCancelled, self.acceptsImageSend(pending.credential, generation: sendGeneration) {
+                    if self.isUnknownMessageOutcome(error) {
+                        self.errorMessage = String(localized: "发送结果未确认。请重试确认发送结果。")
+                    } else {
+                        // A contract-level 4xx is a definite non-commit.
+                        self.pendingUnknownMessage = nil
+                        self.isMessageOutcomeUnknown = false
+                        self.errorMessage = error.localizedDescription
+                    }
+                }
+            }
+        }
+    }
+
+    private func isUnknownMessageOutcome(_ error: Error) -> Bool {
+        if error is URLError { return true }
+        if let error = error as? CompanionAPIError, case let .server(status, _, _) = error { return status >= 500 }
+        return true
+    }
+
+    /// This cancels only local media work. It never calls runs/:cancel because
+    /// a message request that already reached the service remains service fact.
+    func cancelImageSend() {
+        guard isSendingMessage else { return }
+        if let pending = pendingUnknownMessage, pending.credential == credential {
+            // The commit has already begun.  Preserve it synchronously so the
+            // user cannot create a second message before cancellation reaches
+            // URLSession and its task's catch block.
+            isMessageOutcomeUnknown = true
+            errorMessage = String(localized: "发送结果未确认。请重试确认发送结果。")
+        }
+        imageSendGeneration = UUID()
+        imageSendTask?.cancel()
+        imageSendTask = nil
+        isSendingMessage = false
+        imageSendProgress = nil
+    }
+
+    private func acceptsImageSend(_ expectedCredential: SessionCredential, generation: UUID) -> Bool {
+        !Task.isCancelled && credential == expectedCredential && imageSendGeneration == generation
+    }
+
     func select(_ selection: MessageSelection, option: MessageSelectionOption) {
         guard isConnected,
               credential != nil,
               !isBusy,
+              !isMessageOutcomeUnknown,
               !isSendingMessage,
               selectionStates[selection.interactionID]?.status == .open,
               selection.options.contains(where: { $0.id == option.id }) else { return }
@@ -399,6 +612,14 @@ final class BatonViewModel: ObservableObject {
     func suspendActiveConversation() {
         guard credential != nil else { return }
         cancelVoiceInput()
+        // A paused scene may not keep uploading or turn a late upload into a
+        // new server message. The retained draft is retried only by a later
+        // explicit Send action.
+        cancelImageSend()
+        imageImportGeneration = UUID()
+        imageImportCredential = nil
+        imageImportTask?.cancel(); imageImportTask = nil
+        isImportingImages = false
         shouldMaintainConnection = false
         snapshotTask?.cancel(); snapshotTask = nil
         streamTask?.cancel(); streamTask = nil
@@ -500,6 +721,22 @@ final class BatonViewModel: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    // Internal test seam: production still reaches this path only after
+    // Keychain-backed pairing/session activation.
+    func activateForTesting(_ credential: SessionCredential) {
+        if let current = self.credential, current != credential {
+            imageSendGeneration = UUID()
+            imageSendTask?.cancel(); imageSendTask = nil
+            isSendingMessage = false
+            imageSendProgress = nil
+            clearMessageDraftForDifferentSession()
+        }
+        self.credential = credential
+        isConnected = true
+        isBusy = false
+        connectionStatus = "test"
     }
 
     func renameSavedSession(id: String, title: String) {
@@ -730,6 +967,8 @@ final class BatonViewModel: ObservableObject {
         mediaPrefetchTask?.cancel(); mediaPrefetchTask = nil
         cacheRestoreTask?.cancel(); cacheRestoreTask = nil
         persistenceTask?.cancel(); persistenceTask = nil
+        imageSendGeneration = UUID(); imageSendTask?.cancel(); imageSendTask = nil
+        removeSelectedPhotos(force: true)
         imageLoader?.invalidate()
         let persistenceError = removedCredential.flatMap { removePersistedSession($0) }
         guard persistenceError == nil else {
@@ -742,7 +981,8 @@ final class BatonViewModel: ObservableObject {
         }
         credential = nil; conversation = nil; messages = []; selectionStates = [:]; reducer = ConversationEventReducer(); imageLoader = nil; activeConversationStore = nil
         isSendingMessage = false
-        draftMessageText = nil; draftMessageID = nil
+        draftMessageText = nil; draftMessageIdentity = nil; draftMessageID = nil
+        pendingUnknownMessage = nil; isMessageOutcomeUnknown = false
         selectionDraft = nil
         activeRunID = nil; agentActivity = .idle; isConnected = false; isBusy = false; connectionStatus = String(localized: "尚未连接"); errorMessage = persistenceError
         endIdempotencyKey = nil
@@ -845,7 +1085,8 @@ final class BatonViewModel: ObservableObject {
                         service: pending.document.service,
                         conversation: issuedConversation,
                         conversationEndpoint: pending.document.endpoints.conversation,
-                        canEndConversation: pending.document.capabilities.conversationEnd
+                        canEndConversation: pending.document.capabilities.conversationEnd,
+                        imageUploadPolicy: pending.document.imageUploadPolicy
                     )
                     // The only point at which a SessionCredential is written.
                     updateSavedSessions(try KeychainStore.upsertSession(newCredential))
@@ -1008,17 +1249,21 @@ final class BatonViewModel: ObservableObject {
     func dismissVoiceIssue() { speechInput.dismissIssue() }
 
     private func activateSession(_ selectedCredential: SessionCredential) {
+        let reopensActiveSession = credential == selectedCredential
         snapshotTask?.cancel(); snapshotTask = nil
         streamTask?.cancel(); streamTask = nil
         mediaPrefetchTask?.cancel(); mediaPrefetchTask = nil
         cacheRestoreTask?.cancel(); cacheRestoreTask = nil
-        let reopensActiveSession = credential == selectedCredential
+        imageSendGeneration = UUID(); imageSendTask?.cancel(); imageSendTask = nil
+        imageImportGeneration = UUID(); imageImportCredential = nil
+        imageImportTask?.cancel(); imageImportTask = nil
+        isImportingImages = false
+        if !reopensActiveSession {
+            clearMessageDraftForDifferentSession()
+        }
         if !reopensActiveSession { imageLoader?.invalidate() }
         acceptsSpeechTranscript = false
         speechInput.discardTranscript()
-        composerText = ""
-        draftMessageText = nil
-        draftMessageID = nil
         // Publish the title before the session identity used for navigation.
         conversation = selectedCredential.conversation
         credential = selectedCredential
@@ -1057,6 +1302,16 @@ final class BatonViewModel: ObservableObject {
             connectionStatus = String(localized: "会话恢复失败")
             errorMessage = error.localizedDescription
         }
+    }
+
+    private func clearMessageDraftForDifferentSession() {
+        removeSelectedPhotos(force: true)
+        composerText = ""
+        draftMessageText = nil
+        draftMessageIdentity = nil
+        draftMessageID = nil
+        pendingUnknownMessage = nil
+        isMessageOutcomeUnknown = false
     }
 
     private func updateSavedSessions(_ sessions: [StoredConversationSession]) {

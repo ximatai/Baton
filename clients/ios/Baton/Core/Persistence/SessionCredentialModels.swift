@@ -18,12 +18,13 @@ struct SessionCredential: Codable, Equatable {
     let conversation: ConversationDescriptor
     let conversationEndpoint: URL
     let canEndConversation: Bool
+    let imageUploadPolicy: ImageUploadPolicy?
 
     enum CodingKeys: String, CodingKey {
-        case accessToken, deviceID, sessionID, service, conversation, conversationEndpoint, canEndConversation
+        case accessToken, deviceID, sessionID, service, conversation, conversationEndpoint, canEndConversation, imageUploadPolicy
     }
 
-    init(accessToken: String, deviceID: String, sessionID: String, service: ServiceDescriptor, conversation: ConversationDescriptor, conversationEndpoint: URL, canEndConversation: Bool = false) {
+    init(accessToken: String, deviceID: String, sessionID: String, service: ServiceDescriptor, conversation: ConversationDescriptor, conversationEndpoint: URL, canEndConversation: Bool = false, imageUploadPolicy: ImageUploadPolicy? = nil) {
         self.accessToken = accessToken
         self.deviceID = deviceID
         self.sessionID = sessionID
@@ -31,6 +32,7 @@ struct SessionCredential: Codable, Equatable {
         self.conversation = conversation
         self.conversationEndpoint = conversationEndpoint
         self.canEndConversation = canEndConversation
+        self.imageUploadPolicy = imageUploadPolicy
     }
 
     init(from decoder: Decoder) throws {
@@ -42,6 +44,7 @@ struct SessionCredential: Codable, Equatable {
         conversation = try container.decode(ConversationDescriptor.self, forKey: .conversation)
         conversationEndpoint = try container.decode(URL.self, forKey: .conversationEndpoint)
         canEndConversation = try container.decodeIfPresent(Bool.self, forKey: .canEndConversation) ?? false
+        imageUploadPolicy = try container.decodeIfPresent(ImageUploadPolicy.self, forKey: .imageUploadPolicy).flatMap { $0.isValid ? $0 : nil }
     }
 
     /// A device session is replaceable; a saved-list item represents the

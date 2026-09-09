@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
+import hashlib
 import html
 import json
 import re
@@ -13,6 +15,8 @@ import time
 import uuid
 import zlib
 from io import BytesIO
+from email.parser import BytesParser
+from email.policy import default as email_policy
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -52,14 +56,21 @@ DEMO_IMAGE_PATH = "/v1/baton/media/mock-chart.png"
 DEMO_IMAGE_ID = "med_mock_chart_v1"
 DEMO_IMAGE_ALT = "蓝色渐变的本地 Mock 图表示例"
 DEMO_IMAGE_BYTES = demo_image_png()
+IMAGE_UPLOAD_LIMITS = {"max_items_per_message": 4, "max_bytes_per_item": 12 * 1024 * 1024,
+                       "max_pixels_per_item": 25_000_000,
+                       "mime_types": ["image/jpeg", "image/png", "image/webp"]}
+MODEL_TEXT_LIMIT = 32_000
+MODEL_IMAGE_BYTES_LIMIT = 16 * 1024 * 1024
 
 
 class Store:
-    def __init__(self, base_url, *, event_retention=64):
+    def __init__(self, base_url, *, event_retention=64, reply_demo_image=True):
+        self.reply_demo_image = reply_demo_image
         self.base_url, self.lock = base_url.rstrip("/"), threading.RLock()
         self.condition = threading.Condition(self.lock)
         self.pairings, self.tokens, self.events = {}, {}, []
-        self.runs, self.messages, self.next_sequence = {}, [], 1
+        self.runs, self.messages, self.next_sequence, self.client_payloads = {}, [], 1, {}
+        self.staged_media, self.upload_keys, self.media_tombstones = {}, {}, {}
         self.selection_states = {}
         self.conversation_closed = False
         self.conversation_epoch = 0
@@ -68,6 +79,12 @@ class Store:
         self.event_retention = max(1, event_retention)
         self.conversation_id = None
         self.reset_conversation()
+        threading.Thread(target=self._media_cleanup_loop, daemon=True).start()
+
+    def _media_cleanup_loop(self):
+        while True:
+            time.sleep(60)
+            with self.lock: self.cleanup_staged_media()
 
     def reset_conversation(self, title="Local test conversation", welcome=True, fixture_media=True, review_demo=False):
         self.conversation_epoch += 1
@@ -77,7 +94,8 @@ class Store:
         self.conversation_title = title
         self.fixture_media_enabled = fixture_media
         self.is_review_demo = review_demo
-        self.messages, self.runs, self.events, self.next_sequence = [], {}, [], 1
+        self.messages, self.runs, self.events, self.next_sequence, self.client_payloads = [], {}, [], 1, {}
+        self.staged_media, self.upload_keys, self.media_tombstones = {}, {}, {}
         self.selection_states = {}
         self.conversation_closed = False
         messages = []
@@ -107,6 +125,9 @@ class Store:
             if pairing.get("request"):
                 pairing["request"]["access_token"] = None
         self.tokens.clear()
+        for media_id in [key for key, item in self.staged_media.items() if not item["committed"]]:
+            self.staged_media.pop(media_id, None)
+        self.upload_keys.clear()
         self.event("conversation.closed", {"conversation_id": self.conversation_id})
         return True
 
@@ -154,6 +175,33 @@ class Store:
                               "client_capabilities": copy.deepcopy(client_capabilities or {})}
         return token, session_id
 
+    def cleanup_staged_media(self):
+        current = time.time()
+        expired = [media_id for media_id, item in self.staged_media.items()
+                   if not item["committed"] and item["expires_at"] <= current]
+        for media_id in expired:
+            item = self.staged_media.pop(media_id)
+            self.media_tombstones[media_id] = {"session_id": item["session_id"], "conversation_id": item["conversation_id"],
+                                               "retained_until": current + 1800}
+
+    def revoke_session(self, token):
+        credential = self.tokens.pop(token, None)
+        if credential:
+            session_id = credential["session_id"]
+            for media_id in [key for key, item in self.staged_media.items()
+                             if item["session_id"] == session_id and not item["committed"]]:
+                self.staged_media.pop(media_id, None)
+            for media_id in [key for key, item in self.media_tombstones.items() if item["session_id"] == session_id]:
+                self.media_tombstones.pop(media_id, None)
+        return credential
+
+    def credential_active(self, credential, conversation_id, epoch):
+        token = credential.get("_token") if credential else None
+        active = self.tokens.get(token)
+        return (not self.conversation_closed and self.conversation_id == conversation_id and self.conversation_epoch == epoch
+                and active is not None and active["session_id"] == credential["session_id"]
+                and active["conversation_id"] == conversation_id)
+
     def can_issue_required_selection(self):
         """A required choice is safe only when every live Baton device can render it."""
         devices = [record for record in self.tokens.values() if record["conversation_id"] == self.conversation_id]
@@ -175,6 +223,7 @@ class Store:
             if run["status"] != "active":
                 return run["status"], False
             run["status"] = "cancelled"
+            run.pop("history", None)
             message = next((item for item in self.messages if item["id"] == run["message_id"]), None)
             if message:
                 message["status"] = "cancelled"
@@ -185,6 +234,7 @@ class Store:
 
 STORE = None
 CHAT_COMPLETER = None
+VISION_ENABLED = False
 SSE_LIVE_SECONDS = 300
 REVIEW_DEMO_TOKEN = None
 REVIEW_ACTION_TOKEN = None
@@ -251,12 +301,26 @@ class OpenAICompatibleChatCompleter:
             "role": "system",
             "content": f"You are Baton’s helpful {language}-speaking assistant. Reply directly and concisely in {language}.",
         }]
-        # This fixture deliberately sends only the latest user turn. The
-        # configured LM Studio model's prompt template rejects assistant turns;
-        # conversation history belongs to the real Companion/Java server, not
-        # this small local test adapter.
-        if content:
-            provider_messages.append({"role": "user", "content": content})
+        # Non-vision mode preserves the old fixture behavior: only its latest
+        # user text goes upstream. Vision receives the run-acceptance snapshot.
+        source_messages = messages if VISION_ENABLED else ([latest_user] if latest_user else [])
+        for message in source_messages:
+            parts = message.get("content", [])
+            if not isinstance(parts, list): continue
+            if VISION_ENABLED:
+                blocks = []
+                for part in parts:
+                    if part.get("type") == "text" and part.get("text"):
+                        blocks.append({"type": "text", "text": part["text"]})
+                    elif part.get("type") == "image":
+                        image_bytes, image_mime = part.get("_model_bytes"), part.get("_model_mime")
+                        if not (isinstance(image_bytes, bytes) and isinstance(image_mime, str)): continue
+                        data_url = "data:%s;base64,%s" % (image_mime, base64.b64encode(image_bytes).decode())
+                        blocks.append({"type": "image_url", "image_url": {"url": data_url}})
+                if blocks: provider_messages.append({"role": message["role"], "content": blocks})
+            else:
+                text_value = "".join(part.get("text", "") for part in parts if part.get("type") == "text")
+                if text_value: provider_messages.append({"role": message["role"], "content": text_value})
         if len(provider_messages) == 1:
             raise ChatCompletionError("no user message to complete")
         payload = {"model": self.model, "messages": provider_messages, "temperature": 0.4}
@@ -298,6 +362,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "": route = "console"
         elif path == "/v1/baton/mock/web/conversation": route = "fixture.web.snapshot"
         elif path == "/v1/baton/mock/web/events": route = "fixture.web.events"
+        elif path.startswith("/v1/baton/mock/web/media/"): route = "fixture.web.media"
         elif path == "/v1/baton/mock/web/messages": route = "fixture.web.messages"
         elif path.startswith("/.well-known/baton/pair/"): route = "pairing.discovery"
         elif path == "/v1/baton/pairings": route = "pairing.create"
@@ -317,7 +382,92 @@ class Handler(BaseHTTPRequestHandler):
         fixture_log("http.request", method=self.command, route=route, status=status)
 
     def raw_body(self):
-        return self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        if self.headers.get("Transfer-Encoding"):
+            return None
+        try: length = int(self.headers.get("Content-Length", "0"))
+        except ValueError: return None
+        ceiling = IMAGE_UPLOAD_LIMITS["max_bytes_per_item"] + 16 * 1024
+        if length < 0 or length > ceiling: return None
+        body = self.rfile.read(length)
+        return body if len(body) == length else None
+
+    def multipart_file(self, raw):
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.startswith("multipart/form-data"):
+            return None
+        message = BytesParser(policy=email_policy).parsebytes(
+            ("Content-Type: " + content_type + "\r\nMIME-Version: 1.0\r\n\r\n").encode() + raw)
+        parts = list(message.iter_parts())
+        if len(parts) != 1 or parts[0].get_param("name", header="content-disposition") != "file": return None
+        return parts[0].get_payload(decode=True) or b"", parts[0].get_content_type().lower()
+
+    def decode_static_image(self, value, declared_mime):
+        if not value or len(value) > IMAGE_UPLOAD_LIMITS["max_bytes_per_item"]:
+            return None, "media_too_large"
+        try:
+            from PIL import Image
+            with Image.open(BytesIO(value)) as image:
+                image.verify()
+            with Image.open(BytesIO(value)) as image:
+                if getattr(image, "n_frames", 1) != 1:
+                    return None, "invalid_image_content"
+                mime_type = {"JPEG": "image/jpeg", "PNG": "image/png", "WEBP": "image/webp"}.get(image.format)
+                if mime_type not in IMAGE_UPLOAD_LIMITS["mime_types"] or declared_mime != mime_type:
+                    return None, "unsupported_media_type"
+                width, height = image.size
+                if width < 1 or height < 1 or width * height > IMAGE_UPLOAD_LIMITS["max_pixels_per_item"]:
+                    return None, "invalid_image_content"
+                image.load()
+                if getattr(image, "is_animated", False):
+                    return None, "invalid_image_content"
+            return {"bytes": value, "mime_type": mime_type, "width": width, "height": height}, None
+        except Exception:
+            return None, "invalid_image_content"
+
+    def upload_media(self, raw, credential):
+        if not VISION_ENABLED:
+            return self.error(404, "not_found", "Image upload is not enabled.")
+        key = self.headers.get("Idempotency-Key", "")
+        try: uuid.UUID(key)
+        except ValueError: return self.error(400, "invalid_media_request", "Idempotency-Key UUID is required.")
+        multipart = self.multipart_file(raw)
+        if multipart is None: return self.error(400, "invalid_media_request", "Exactly one multipart file part is required.")
+        value, declared_mime = multipart
+        digest = hashlib.sha256(declared_mime.encode() + b"\0" + value).hexdigest()
+        conversation_id, epoch = credential["_conversation_id"], credential["_epoch"]
+        scope = (credential["session_id"], conversation_id, key)
+        with STORE.lock:
+            STORE.cleanup_staged_media()
+            if not STORE.credential_active(credential, conversation_id, epoch):
+                return self.error(401, "session_revoked", "Device session is no longer active.")
+            previous = STORE.upload_keys.get(scope)
+            if previous:
+                if previous["digest"] != digest: return self.error(409, "idempotency_key_conflict", "Upload key has a different payload.")
+                media = STORE.staged_media.get(previous["media_id"])
+                if not media: return self.error(410, "media_expired", "Staged media expired.")
+                return self.send_json(media["response"], 200)
+        decoded, problem = self.decode_static_image(value, declared_mime)
+        if problem:
+            return self.error(413 if problem == "media_too_large" else 415 if problem == "unsupported_media_type" else 422,
+                              problem, "Image content is not an allowed static image.")
+        with STORE.lock:
+            STORE.cleanup_staged_media()
+            if not STORE.credential_active(credential, conversation_id, epoch):
+                return self.error(401, "session_revoked", "Device session is no longer active.")
+            previous = STORE.upload_keys.get(scope)
+            if previous:
+                if previous["digest"] != digest: return self.error(409, "idempotency_key_conflict", "Upload key has a different payload.")
+                media = STORE.staged_media.get(previous["media_id"])
+                return self.error(410, "media_expired", "Staged media expired.") if not media else self.send_json(media["response"], 200)
+            media_id, expires = "med_" + uuid.uuid4().hex, time.time() + 1800
+            response = {"media_id": media_id, "mime_type": decoded["mime_type"], "width": decoded["width"],
+                        "height": decoded["height"], "byte_size": len(value),
+                        "expires_at": datetime.fromtimestamp(expires, timezone.utc).isoformat().replace("+00:00", "Z")}
+            decoded.update({"session_id": credential["session_id"], "conversation_id": conversation_id,
+                            "expires_at": expires, "response": response, "committed": False})
+            STORE.staged_media[media_id] = decoded
+            STORE.upload_keys[scope] = {"digest": digest, "media_id": media_id}
+            return self.send_json(response, 201)
 
     def send_json(self, value, status=200):
         payload = json.dumps(value, ensure_ascii=False).encode()
@@ -361,10 +511,17 @@ class Handler(BaseHTTPRequestHandler):
     def auth(self):
         value = self.headers.get("Authorization", "")
         with STORE.lock:
-            credential = STORE.tokens.get(value[7:] if value.startswith("Bearer ") else "")
+            token = value[7:] if value.startswith("Bearer ") else ""
+            credential = STORE.tokens.get(token)
             if not credential or STORE.conversation_closed:
                 return None
-            return credential if credential["conversation_id"] == STORE.conversation_id else None
+            if credential["conversation_id"] != STORE.conversation_id:
+                return None
+            result = copy.deepcopy(credential)
+            result["_token"] = token
+            result["_conversation_id"] = STORE.conversation_id
+            result["_epoch"] = STORE.conversation_epoch
+            return result
 
     def create_pairing(self, body):
         # Fixture-only test hook. It is explicitly not a Companion Profile field.
@@ -542,7 +699,7 @@ class Handler(BaseHTTPRequestHandler):
 <main><header class="hero"><div class="eyebrow">Baton · App Review Demo</div><h1>One conversation, two screens.</h1><p>Scan at left with Baton; follow the same live conversation at right. A fresh QR keeps this conversation. Ending it disconnects every device and starts a clean demo.</p></header><div class="layout"><section class="card pair"><div class="eyebrow">Pair a device</div><h2>Scan to join</h2><img class="qr" id="qr" alt="Short-lived Baton review pairing QR code"><p class="status" id="status">Creating a secure review QR…</p><p class="hint" id="hint"></p><div class="actions"><button class="button primary" id="new">Generate a fresh QR</button><button class="button danger" id="end">End and reset demo</button></div></section><section class="card chat"><div class="chat-head"><div><div class="eyebrow">Shared conversation</div><div class="chat-title">Today’s task plan</div></div><div class="online" id="chat-status">Connecting…</div></div><div class="messages" id="messages"></div><form class="composer" id="composer"><input id="text" autocomplete="off" placeholder="Send a message from the web"><button class="button primary">Send</button></form></section></div></main>
 <script>
 let expiresAt=0,timer=null,pairingTimer=null,pairingID=null,creating=false,createQueued=false,stream=null,ended=false;const $=id=>document.getElementById(id),messages=new Map(),pairingEndpoint=location.pathname==='/'?'/pairing':location.pathname+'/pairing',reviewAction=__REVIEW_ACTION_TOKEN__;function pageInstanceID(){const key='baton-review-instance';try{let value=sessionStorage.getItem(key);if(value)return value;value=messageID();sessionStorage.setItem(key,value);return value}catch{return messageID()}}const reviewInstanceID=pageInstanceID();
-function show(text,hint=''){$('status').textContent=text;$('hint').textContent=hint}function render(){const list=$('messages');list.replaceChildren();if(!messages.size){const empty=document.createElement('div');empty.className='message empty';empty.textContent='Start the shared conversation from Baton or the web.';list.append(empty)}for(const message of messages.values()){const item=document.createElement('div');item.className='message '+(message.role==='user'?'user':'assistant');item.textContent=(message.content||[]).map(part=>part.text||'').join('')||(message.status==='streaming'?'Thinking…':'');list.append(item)}list.scrollTop=list.scrollHeight}function put(message){if(message&&message.id){messages.set(message.id,message);render()}}function update(id,fn){const message=messages.get(id)||{id,role:'assistant',content:[{type:'text',text:''}],status:'streaming'};fn(message);messages.set(id,message);render()}
+function show(text,hint=''){$('status').textContent=text;$('hint').textContent=hint}function render(){const list=$('messages');list.replaceChildren();if(!messages.size){const empty=document.createElement('div');empty.className='message empty';empty.textContent='Start the shared conversation from Baton or the web.';list.append(empty)}for(const message of messages.values()){const item=document.createElement('div');item.className='message '+(message.role==='user'?'user':'assistant');for(const part of message.content||[]){if(part.type==='image'&&part.media_id){const image=document.createElement('img');image.src='/v1/baton/mock/web/media/'+encodeURIComponent(part.media_id);image.alt=part.alt||'Shared image';image.style.cssText='display:block;max-width:100%;border-radius:10px;margin:6px 0';item.append(image)}else if(part.text){item.append(document.createTextNode(part.text))}}if(!item.childNodes.length)item.textContent=message.status==='streaming'?'Thinking…':'';list.append(item)}list.scrollTop=list.scrollHeight}function put(message){if(message&&message.id){messages.set(message.id,message);render()}}function update(id,fn){const message=messages.get(id)||{id,role:'assistant',content:[{type:'text',text:''}],status:'streaming'};fn(message);messages.set(id,message);render()}
 async function create(){if(creating){createQueued=true;return}creating=true;clearInterval(timer);clearInterval(pairingTimer);pairingTimer=null;pairingID=null;show('Creating a secure review QR…');try{const response=await fetch(pairingEndpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_instance_id:reviewInstanceID})});if(!response.ok){show('Could not create the review QR.','Please reload this page.');return}const pairing=await response.json();pairingID=pairing.pairing_id;$('qr').src='/v1/baton/pairings/'+pairingID+'/qr.png';expiresAt=Date.parse(pairing.expires_at);tick();timer=setInterval(tick,1000);pairingTimer=setInterval(checkPairing,1000)}catch{show('Could not create the review QR.','Please reload this page.')}finally{creating=false;if(createQueued){createQueued=false;create()}}}async function checkPairing(){if(!pairingID)return;try{const response=await fetch('/v1/baton/pairings/'+pairingID+'/mock-status');if(!response.ok)return;const pairing=await response.json();if(pairing.status==='created')return;clearInterval(pairingTimer);pairingTimer=null;show('A device joined. Generating a fresh QR…','The connected device remains in this conversation.');await create()}catch{/* The current QR remains usable if this observer request fails. */}}function tick(){const seconds=Math.max(0,Math.ceil((expiresAt-Date.now())/1000));if(!seconds){clearInterval(timer);create();return}show('Ready to scan.','This QR expires in '+seconds+' seconds and is valid for one device.')}
 async function load(){const response=await fetch('/v1/baton/mock/web/conversation');if(!response.ok)throw Error();const snapshot=await response.json();messages.clear();snapshot.messages.slice().reverse().forEach(put);$('chat-status').textContent='Live · Baton Review Demo'}function subscribe(){if(stream)stream.close();stream=new EventSource('/v1/baton/mock/web/events');stream.onopen=()=>{$('chat-status').textContent='Live · Baton Review Demo'};stream.addEventListener('message.created',e=>put(JSON.parse(e.data).data));stream.addEventListener('message.delta',e=>{const d=JSON.parse(e.data).data;update(d.message_id,m=>{m.content=m.content||[{type:'text',text:''}];m.content[0].text=(m.content[0].text||'')+d.delta;m.status='streaming'})});stream.addEventListener('message.completed',e=>update(JSON.parse(e.data).data.message_id,m=>m.status='completed'));stream.addEventListener('conversation.closed',()=>{$('chat-status').textContent='Conversation ended';ended=true;$('text').disabled=true})}
 function messageID(){if(globalThis.crypto&&typeof globalThis.crypto.randomUUID==='function')return globalThis.crypto.randomUUID();return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const r=Math.floor(Math.random()*16),v=c==='x'?r:(r&3)|8;return v.toString(16)})}$('composer').onsubmit=async e=>{e.preventDefault();const input=$('text'),text=input.value.trim();if(!text||ended)return;input.disabled=true;try{const r=await fetch('/v1/baton/mock/web/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({client_message_id:messageID(),content:[{type:'text',text}]})});if(!r.ok)throw Error();input.value='';$('chat-status').textContent='Sending…';await load()}catch{$('chat-status').textContent='Send failed — retry.'}finally{input.disabled=false;input.focus()}};$('new').onclick=create;$('end').onclick=async()=>{if(!confirm('End this demo conversation? Connected Baton devices will be disconnected.'))return;$('end').disabled=true;$('new').disabled=true;const r=await fetch('/conversation:end',{method:'POST',headers:{'Content-Type':'application/json','X-Baton-Review-Action':reviewAction},body:'{}'});if(!r.ok){$('chat-status').textContent='Could not end conversation.';$('end').disabled=false;$('new').disabled=false;return}ended=false;$('text').disabled=false;messages.clear();render();await create();subscribe();await load();$('end').disabled=false;$('new').disabled=false};render();subscribe();load().catch(()=>{$('chat-status').textContent='Could not load conversation.'});create();
@@ -584,7 +741,7 @@ const messages=new Map(), messageList=$('messages');
 function put(message){if(!message||!message.id)return;messages.set(message.id,message);render();}
 function update(id, change){const message=messages.get(id)||{id,role:'assistant',content:[{type:'text',text:''}],status:'streaming'};change(message);messages.set(id,message);render();}
 function textOf(message){return (message.content||[]).map(part=>part.text||'').join('');}
-function render(){messageList.replaceChildren();if(!messages.size){const empty=document.createElement('div');empty.className='message empty';empty.textContent='开始这段共享对话。';messageList.append(empty);return}for(const message of messages.values()){const item=document.createElement('div');item.className='message '+(message.role==='user'?'user':'assistant');item.textContent=textOf(message)||(message.status==='streaming'?'正在思考…':'');messageList.append(item)}messageList.scrollTop=messageList.scrollHeight;}
+function render(){messageList.replaceChildren();if(!messages.size){const empty=document.createElement('div');empty.className='message empty';empty.textContent='开始这段共享对话。';messageList.append(empty);return}for(const message of messages.values()){const item=document.createElement('div');item.className='message '+(message.role==='user'?'user':'assistant');for(const part of message.content||[]){if(part.type==='image'&&part.media_id){const image=document.createElement('img');image.src='/v1/baton/mock/web/media/'+encodeURIComponent(part.media_id);image.alt=part.alt||'共享图片';image.style.cssText='display:block;max-width:100%;border-radius:10px;margin:6px 0';item.append(image)}else if(part.text){item.append(document.createTextNode(part.text))}}if(!item.childNodes.length)item.textContent=message.status==='streaming'?'正在思考…':'';messageList.append(item)}messageList.scrollTop=messageList.scrollHeight;}
 async function loadConversation(){const response=await fetch('/v1/baton/mock/web/conversation');if(!response.ok)throw new Error('snapshot');const snapshot=await response.json();for(const message of snapshot.messages.slice().reverse())put(message);$('chat-status').textContent='已连接 · Local Baton Mock';}
 function closeWebConversation(){if(conversationEnded)return;conversationEnded=true;if(stream)stream.close();messages.clear();render();$('chat-status').textContent='对话已结束。生成新二维码可开始新会话。';$('text').disabled=true;$('end').disabled=true;}
 function subscribe(){stream=new EventSource('/v1/baton/mock/web/events');stream.onopen=()=>{if(!conversationEnded)$('chat-status').textContent='已连接 · 实时同步中';};stream.onerror=()=>{if(!conversationEnded)$('chat-status').textContent='连接中断，正在重试…';};stream.addEventListener('message.created',event=>put(JSON.parse(event.data).data));stream.addEventListener('message.delta',event=>{const data=JSON.parse(event.data).data;update(data.message_id,message=>{message.content=message.content||[{type:'text',text:''}];message.content[0].text=(message.content[0].text||'')+data.delta;message.status='streaming';});});stream.addEventListener('message.completed',event=>{const data=JSON.parse(event.data).data;update(data.message_id,message=>{message.status=data.status||'completed';});});stream.addEventListener('message.content.appended',event=>{const data=JSON.parse(event.data).data;update(data.message_id,message=>{message.content=(message.content||[]).concat(data.content||[]);});});stream.addEventListener('message.failed',event=>{const data=JSON.parse(event.data).data;update(data.message_id,message=>{message.status='failed';message.content=[{type:'text',text:data.message||'回复失败，请重试。'}];});});stream.addEventListener('conversation.closed',closeWebConversation);}
@@ -604,12 +761,29 @@ create();
             return self.send_json({"pairing_id": pairing_id, "status": pairing["status"],
                                    "device_name": request.get("device_name")})
 
-    def submit_message(self, body):
+    def submit_message(self, body, credential=None):
         """Shared message path for the mobile API and fixture-only Web client."""
+        if not isinstance(body, dict): return self.error(400, "invalid_json", "JSON object required.")
         client_id = body.get("client_message_id")
-        content = body.get("content") if isinstance(body.get("content"), list) else []
+        if "content" not in body and isinstance(body.get("text"), str): content = [{"type": "text", "text": body["text"]}]
+        else: content = body.get("content")
+        if not isinstance(content, list) or not content or any(not isinstance(part, dict) for part in content):
+            return self.error(400, "invalid_message", "content must be a non-empty array of objects.")
         first = content[0] if content else {}
-        text = first.get("text") if first.get("type") == "text" else body.get("text")
+        if any(not isinstance(part.get("type"), str) for part in content):
+            return self.error(400, "invalid_message", "content type must be a string.")
+        selection = first.get("type") == "selection_response"
+        if selection:
+            if len(content) != 1 or set(first) - {"type", "interaction_id", "option_id"} or not isinstance(first.get("interaction_id"), str) or not isinstance(first.get("option_id"), str):
+                return self.error(400, "invalid_selection", "A selection response must be the only valid content item.")
+        elif any(part.get("type") not in {"text", "image_ref"} for part in content):
+            return self.error(400, "invalid_message", "Unsupported content type.")
+        elif any(part.get("type") == "text" and not isinstance(part.get("text"), str) for part in content):
+            return self.error(400, "invalid_message", "text must be a string.")
+        elif any(part.get("type") == "image_ref" and (not isinstance(part.get("media_id"), str) or not part["media_id"]) for part in content):
+            return self.error(400, "invalid_message", "media_id must be a non-empty string.")
+        text = "".join(part["text"] for part in content if part.get("type") == "text")
+        fingerprint = json.dumps(content, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         try:
             valid_client_id = isinstance(client_id, str) and str(uuid.UUID(client_id)) == client_id.lower()
         except (ValueError, AttributeError):
@@ -617,11 +791,16 @@ create();
         if not valid_client_id:
             return self.error(400, "invalid_message", "client_message_id is required.")
         with STORE.condition:
-            if STORE.conversation_closed:
-                return self.error(410, "conversation_closed", "Conversation has ended.")
-            for message in STORE.messages:
-                if message.get("client_message_id") == client_id: return self.send_json(message)
-            if first.get("type") == "selection_response":
+            conversation_id = credential.get("_conversation_id") if credential else STORE.conversation_id
+            epoch = credential.get("_epoch") if credential else STORE.conversation_epoch
+            if credential and not STORE.credential_active(credential, conversation_id, epoch): return self.error(401, "session_revoked", "Device session is no longer active.")
+            if STORE.conversation_id != conversation_id or STORE.conversation_epoch != epoch or STORE.conversation_closed: return self.error(410, "conversation_closed", "Conversation has ended.")
+            existing = STORE.client_payloads.get(client_id)
+            if existing:
+                if existing["fingerprint"] != fingerprint:
+                    return self.error(409, "idempotency_key_conflict", "Message id has a different payload.")
+                return self.send_json(existing["message"])
+            if selection:
                 interaction_id, option_id = first.get("interaction_id"), first.get("option_id")
                 state = STORE.selection_states.get(interaction_id)
                 selection = next((part for message in STORE.messages for part in message["content"]
@@ -637,15 +816,46 @@ create();
                 message = STORE.add_message("msg_" + uuid.uuid4().hex[:16], client_id, "user", content=[response])
                 state = {"interaction_id": interaction_id, "status": "answered", "selected_option_id": option_id}
                 STORE.selection_states[interaction_id] = state
+                STORE.client_payloads[client_id] = {"fingerprint": fingerprint, "message": message}
                 STORE.event("message.created", message)
                 STORE.event("selection.resolved", state)
                 return self.send_json(message, 201)
-            if not isinstance(text, str) or not text.strip():
-                return self.error(400, "invalid_message", "text or selection_response content is required.")
             if any(state["status"] == "open" and state.get("input_policy") == "selection_required"
                    for state in STORE.selection_states.values()):
-                return self.error(409, "selection_required", "Complete the required selection before sending text.")
-            message = STORE.add_message("msg_" + uuid.uuid4().hex[:16], client_id, "user", text)
+                return self.error(409, "selection_required", "Complete the required selection before sending content.")
+            image_refs = [part.get("media_id") for part in content if isinstance(part, dict) and part.get("type") == "image_ref"]
+            if image_refs and not VISION_ENABLED:
+                return self.error(400, "invalid_message", "Image references are not enabled.")
+            if len(image_refs) != len(set(image_refs)) or len(image_refs) > IMAGE_UPLOAD_LIMITS["max_items_per_message"]:
+                return self.error(409, "too_many_media_items", "Invalid image references.")
+            resolved = []
+            for media_id in image_refs:
+                media = STORE.staged_media.get(media_id)
+                if not media:
+                    tombstone = STORE.media_tombstones.get(media_id)
+                    if tombstone and credential and tombstone["session_id"] == credential["session_id"] and tombstone["conversation_id"] == conversation_id:
+                        return self.error(410, "media_expired", "Staged media expired.")
+                    return self.error(409, "media_not_owned", "Media does not belong to this device session.")
+                if not credential or media["session_id"] != credential["session_id"] or media["conversation_id"] != conversation_id:
+                    return self.error(409, "media_not_owned", "Media does not belong to this device session.")
+                if media["expires_at"] <= time.time():
+                    return self.error(410, "media_expired", "Staged media expired.")
+                if media["committed"]: return self.error(409, "media_already_committed", "Media was already committed.")
+                resolved.append({"type": "image", "media_id": media_id,
+                                 "url": STORE.base_url + "/v1/baton/media/" + media_id,
+                                 "mime_type": media["mime_type"], "width": media["width"], "height": media["height"], "alt": ""})
+            if not text.strip():
+                if not resolved: return self.error(400, "invalid_message", "text or image_ref content is required.")
+                text = ""
+            if VISION_ENABLED and (len(text) > MODEL_TEXT_LIMIT or sum(len(STORE.staged_media[media_id]["bytes"]) for media_id in image_refs) > MODEL_IMAGE_BYTES_LIMIT):
+                return self.error(413, "model_context_too_large", "The current message exceeds the model context budget.")
+            persisted_content = []
+            for part in content:
+                if part.get("type") == "text": persisted_content.append({"type": "text", "text": part.get("text", "")})
+                elif part.get("type") == "image_ref": persisted_content.append(resolved[image_refs.index(part.get("media_id"))])
+            message = STORE.add_message("msg_" + uuid.uuid4().hex[:16], client_id, "user", content=persisted_content)
+            STORE.client_payloads[client_id] = {"fingerprint": fingerprint, "message": message}
+            for media_id in image_refs: STORE.staged_media[media_id]["committed"] = True
             STORE.event("message.created", message)
             selection = self.fixture_selection_for(text)
             if selection:
@@ -656,9 +866,26 @@ create();
                 return self.send_json(message, 201)
             run_id = "run_" + uuid.uuid4().hex[:12]
             assistant = STORE.add_message("msg_" + uuid.uuid4().hex[:16], None, "assistant", "", status="streaming")
+            frozen_history = copy.deepcopy(STORE.messages)
+            if VISION_ENABLED:
+                text_budget = image_budget = 0
+                selected = []
+                for historic in reversed(frozen_history[-8:]):
+                    if historic["role"] == "assistant" and (historic.get("status") == "streaming" or not historic.get("content")):
+                        continue
+                    parts = historic.get("content", [])
+                    image_bytes = sum(len(STORE.staged_media.get(part.get("media_id"), {}).get("bytes", b""))
+                                      for part in parts if part.get("type") == "image")
+                    text_bytes = sum(len(part.get("text", "")) for part in parts if part.get("type") == "text")
+                    if text_budget + text_bytes > MODEL_TEXT_LIMIT or image_budget + image_bytes > MODEL_IMAGE_BYTES_LIMIT: continue
+                    for part in parts:
+                        if part.get("type") == "image":
+                            media = STORE.staged_media.get(part.get("media_id"))
+                            if media: part["_model_bytes"], part["_model_mime"] = media["bytes"], media["mime_type"]
+                    selected.append(historic); text_budget += text_bytes; image_budget += image_bytes
+                frozen_history = list(reversed(selected))
             STORE.runs[run_id] = {"status": "active", "message_id": assistant["id"],
-                                  "epoch": STORE.conversation_epoch}
-            epoch = STORE.conversation_epoch
+                                  "epoch": epoch, "history": frozen_history}
             STORE.event("run.started", {"run_id": run_id})
             STORE.event("message.created", assistant)
         fixture_log("agent.input.accepted", characters=len(text))
@@ -699,6 +926,9 @@ create();
 
     def do_POST(self):
         path, raw = urlparse(self.path).path.rstrip("/"), self.raw_body()
+        if raw is None:
+            self.close_connection = True
+            return self.error(413, "media_too_large", "Request body is too large or malformed.")
         if REVIEW_DEMO_TOKEN and path == "/conversation:end":
             action = self.headers.get("X-Baton-Review-Action", "")
             if not secrets.compare_digest(action, REVIEW_ACTION_TOKEN):
@@ -731,6 +961,11 @@ create();
                 return self.decide_pairing(pairing_id, decision, redirect=True)
             try: return self.decide_pairing(pairing_id, json.loads(raw or b"{}").get("decision"))
             except (ValueError, TypeError): return self.error(400, "invalid_json", "Invalid JSON.")
+        conversation_path = f"/v1/baton/conversations/{STORE.conversation_id}"
+        if path == conversation_path + "/media":
+            credential = self.auth()
+            if not credential: return self.error(401, "invalid_token", "Missing or invalid bearer token.")
+            return self.upload_media(raw, credential)
         try: body = json.loads(raw or b"{}")
         except (ValueError, TypeError): return self.error(400, "invalid_json", "Invalid JSON.")
         if path == "/v1/baton/mock/web/messages":
@@ -740,14 +975,14 @@ create();
         if path == "/v1/baton/mock/web/conversation:end":
             with STORE.lock: ended = STORE.close_conversation()
             return self.send_json({"status": "ended" if ended else "already_ended"})
-        conversation_path = f"/v1/baton/conversations/{STORE.conversation_id}"
         if path == conversation_path + ":end":
             if not self.auth(): return self.error(401, "invalid_token", "Missing or invalid bearer token.")
             with STORE.lock: ended = STORE.close_conversation()
             return self.send_json({"status": "ended" if ended else "already_ended"})
         if path == conversation_path + "/messages":
-            if not self.auth(): return self.error(401, "invalid_token", "Missing or invalid bearer token.")
-            return self.submit_message(body)
+            credential = self.auth()
+            if not credential: return self.error(401, "invalid_token", "Missing or invalid bearer token.")
+            return self.submit_message(body, credential)
         if path.startswith(conversation_path + "/runs/") and path.endswith(":cancel"):
             if not self.auth(): return self.error(401, "invalid_token", "Missing or invalid bearer token.")
             run_id = path[len(conversation_path + "/runs/"):-len(":cancel")]
@@ -781,6 +1016,16 @@ create();
                 return self.error(400, "invalid_mock_delay", "seconds must be between 0 and 3.")
             with STORE.lock: STORE.slow_next_completion_seconds = seconds
             return self.send_json({"status": "armed"})
+        if path == "/v1/baton/mock/media:expire":
+            credential = self.auth()
+            if not credential: return self.error(401, "invalid_token", "Missing or invalid bearer token.")
+            media_id = body.get("media_id")
+            with STORE.lock:
+                media = STORE.staged_media.get(media_id)
+                if not media or media["session_id"] != credential["session_id"] or media["committed"]:
+                    return self.error(404, "media_not_found", "Staged media is unavailable.")
+                media["expires_at"] = 0
+            return self.send_json({"status": "expired"})
         return self.error(404, "not_found", "Not found.")
 
     def stream_reply(self, run_id, text, epoch):
@@ -794,7 +1039,7 @@ create();
             if not STORE.is_current_run(run_id, epoch): return
             run = STORE.runs[run_id]
             message_id = run["message_id"]
-            history = list(STORE.messages)
+            history = run["history"]
             fail_for_smoke = STORE.fail_next_completion_for_test
             STORE.fail_next_completion_for_test = False
             slow_seconds = STORE.slow_next_completion_seconds
@@ -816,6 +1061,7 @@ create();
                 if not STORE.is_current_run(run_id, epoch): return
                 run = STORE.runs[run_id]
                 run["status"] = "failed"
+                run.pop("history", None)
                 message = next(item for item in STORE.messages if item["id"] == message_id)
                 message["status"] = "failed"
                 STORE.event("message.failed", {"message_id": message_id, "message": "LLM 暂时不可用，请重试。"})
@@ -833,10 +1079,11 @@ create();
             if not STORE.is_current_run(run_id, epoch): return
             run = STORE.runs[run_id]
             run["status"] = "completed"
+            run.pop("history", None)
             message = next(item for item in STORE.messages if item["id"] == message_id)
             message["status"] = "completed"
             STORE.event("message.completed", {"message_id": message_id, "status": "completed"})
-            if STORE.fixture_media_enabled:
+            if STORE.fixture_media_enabled and STORE.reply_demo_image:
                 appended = [{"type": "image", "media_id": DEMO_IMAGE_ID,
                              "url": STORE.base_url + DEMO_IMAGE_PATH, "mime_type": "image/png",
                              "width": 320, "height": 200, "alt": DEMO_IMAGE_ALT}]
@@ -858,7 +1105,11 @@ create();
             with STORE.lock:
                 pairing = self.active_pairing(pairing_id)
                 if not pairing: return
-            return self.send_json({"protocol": "baton/1.2", "pairing_id": pairing_id,
+            capabilities = {"text": True, "markdown": True, "streaming": True, "image": True,
+                            "content_append": True, "conversation_end": True, "selection": True}
+            if VISION_ENABLED:
+                capabilities["image_upload"] = copy.deepcopy(IMAGE_UPLOAD_LIMITS)
+            return self.send_json({"protocol": "baton/1.3" if VISION_ENABLED else "baton/1.2", "pairing_id": pairing_id,
                 "expires_at": datetime.fromtimestamp(pairing["expires_at"], timezone.utc).isoformat().replace("+00:00", "Z"),
                 "service": {"id": "local-mock", "name": pairing["service_name"]},
                 "conversation": {"id": pairing["conversation_id"], "title": pairing["conversation_title"], "agent_name": "Mock Agent"},
@@ -866,7 +1117,7 @@ create();
                 "endpoints": {"join": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/requests",
                               "approval": f"{STORE.base_url}/v1/baton/pairings/{pairing_id}/approval",
                               "conversation": f"{STORE.base_url}/v1/baton/conversations/{STORE.conversation_id}"},
-                "capabilities": {"text": True, "markdown": True, "streaming": True, "image": True, "content_append": True, "conversation_end": True, "selection": True}})
+                "capabilities": capabilities})
         if path.startswith(pairing_prefix) and path.endswith("/approval"):
             return self.approval_page(path[len(pairing_prefix):-len("/approval")].strip("/"))
         if path.startswith(pairing_prefix) and path.endswith("/qr"):
@@ -880,8 +1131,30 @@ create();
             return self.poll_pairing(pairing_id, request_id)
         if path == "/v1/baton/mock/web/conversation": return self.conversation_snapshot()
         if path == "/v1/baton/mock/web/events": return self.sse()
+        if path.startswith("/v1/baton/mock/web/media/"):
+            media_id = path.rsplit("/", 1)[-1]
+            # The local Web client renders the fixture's server-owned welcome
+            # image through this unauthenticated fixture-only route. Keep the
+            # exception limited to that fixed asset; uploads still require an
+            # atomic message commit before their bytes can be resolved here.
+            if media_id == DEMO_IMAGE_ID:
+                return self.send_media(DEMO_IMAGE_BYTES, "image/png")
+            with STORE.lock:
+                media = STORE.staged_media.get(media_id)
+                # This fixture-only resolver exposes bytes only after an
+                # atomic message commit. It never accepts or forwards a
+                # device Bearer credential.
+                if not media or not media["committed"]:
+                    return self.error(404, "media_not_found", "Media is unavailable.")
+                return self.send_media(media["bytes"], media["mime_type"])
         if not self.auth(): return self.error(401, "invalid_token", "Missing or invalid bearer token.")
         if path == DEMO_IMAGE_PATH: return self.send_media(DEMO_IMAGE_BYTES, "image/png")
+        if path.startswith("/v1/baton/media/"):
+            with STORE.lock:
+                media = STORE.staged_media.get(path.rsplit("/", 1)[-1])
+                if not media or not media["committed"]:
+                    return self.error(404, "media_not_found", "Media is unavailable.")
+                return self.send_media(media["bytes"], media["mime_type"])
         conversation_path = f"/v1/baton/conversations/{STORE.conversation_id}"
         if path == conversation_path: return self.conversation_snapshot()
         if path == conversation_path + "/events": return self.sse()
@@ -961,13 +1234,13 @@ create();
                 credential = STORE.tokens.get(token)
                 if not credential or credential["device_id"] != device_id or credential["session_id"] != session_id:
                     return self.error(404, "session_not_found", "Device session not found.")
-                STORE.tokens.pop(token, None)
+                STORE.revoke_session(token)
             return self.send_json({"status": "revoked"})
         return self.error(404, "not_found", "Not found.")
 
 
 def main():
-    global STORE, CHAT_COMPLETER, SSE_LIVE_SECONDS, REVIEW_DEMO_TOKEN, REVIEW_ACTION_TOKEN
+    global STORE, CHAT_COMPLETER, SSE_LIVE_SECONDS, REVIEW_DEMO_TOKEN, REVIEW_ACTION_TOKEN, VISION_ENABLED
     parser = argparse.ArgumentParser(description="Local Baton Companion mock server")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8787)
@@ -980,6 +1253,8 @@ def main():
     parser.add_argument("--openai-reasoning-effort", choices=("none", "low", "medium", "high"), help="optional provider-specific reasoning setting")
     parser.add_argument("--model-warm-interval-seconds", type=int, default=600, help="minimum interval between optional model warm-up requests")
     parser.add_argument("--api-key-env", default="LM_STUDIO_KEY", help="environment variable holding the optional provider key")
+    parser.add_argument("--vision", action="store_true", help="enable the explicit Baton/1.3 static-image upload fixture")
+    parser.add_argument("--no-reply-demo-image", action="store_true", help="omit the automatic demo image from assistant replies; image uploads remain available")
     args = parser.parse_args()
     if args.sse_live_seconds < 1:
         parser.error("--sse-live-seconds must be positive")
@@ -1001,10 +1276,15 @@ def main():
             reasoning_effort=args.openai_reasoning_effort,
             warm_interval_seconds=args.model_warm_interval_seconds,
         )
+    if args.vision:
+        try: from PIL import Image  # noqa: F401
+        except ImportError: parser.error("--vision requires Pillow; install mock_server/requirements-media.txt")
+    VISION_ENABLED = args.vision
     SSE_LIVE_SECONDS = args.sse_live_seconds
     REVIEW_DEMO_TOKEN = args.review_demo_token
     REVIEW_ACTION_TOKEN = secrets.token_urlsafe(24) if REVIEW_DEMO_TOKEN else None
-    STORE = Store(args.public_base_url or f"http://{args.host}:{args.port}", event_retention=args.event_retention)
+    STORE = Store(args.public_base_url or f"http://{args.host}:{args.port}", event_retention=args.event_retention,
+                  reply_demo_image=not args.no_reply_demo_image)
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     provider = f" with OpenAI-compatible model {args.openai_model}" if CHAT_COMPLETER else " with deterministic replies"
     print(f"Baton mock server listening at {STORE.base_url}{provider}", flush=True)

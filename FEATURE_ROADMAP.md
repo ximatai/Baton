@@ -12,7 +12,7 @@ Baton 是服务端 Conversation 的 iOS Companion：服务端是唯一事实源�
 
 - **不做远程推送。** 通用 Baton App 若让每个接入服务直接向 APNs 推送，将涉及 Apple 私钥的安全分发；在没有受控 Push Gateway 的前提下，不纳入本阶段。
 - **不引入 Baton 公共后端。** 每个接入服务继续持有 Conversation、权限、消息与事件日志。
-- **仍不做**图片/相机/文件上传、Agent action approval、Tool UI、生成式业务界面、浏览器镜像。
+- **不做**相机、文件、视频或任意外链输入、Agent action approval、Tool UI、生成式业务界面、浏览器镜像。服务声明后允许 iOS 相册显式选择静态图片并随消息发送。
 - 只接受服务端声明的同源 HTTP(S) endpoint；HTTP 在 UI 中持续标记为未加密。
 - token 与 `device_proof` 只能保存在 Keychain；不得写入日志、UserDefaults、App Group 文件或普通磁盘缓存。
 
@@ -27,6 +27,7 @@ Baton 是服务端 Conversation 的 iOS Companion：服务端是唯一事实源�
 | 4 | 文本分享菜单与引用文本 | 把外部上下文自然带入对话 | 否 | 未开始 |
 | 5 | 快捷短语与恢复反馈 | 提升高频短追问和异常可理解性 | 否 | 未开始 |
 | 候选 | 服务端声明的交互选择 | 支持建议快捷追问与服务端约束的单选分支 | 是，消息 / 事件 / 设备能力扩展 | 进行中（V1.2 首版） |
+| 候选 | 相册静态图片输入 | 将用户明确选择的图片作为同一 Conversation 的消息附件 | 是，V1.3 staged media / `image_ref` / 服务端视觉适配 | 已实现，验收收口中 |
 | 候选 | 服务端托管的只读文档引用 | 展示受控的补充材料 | 是，媒体/文档协议扩展 | 暂缓 |
 
 ## 阶段 1：核心输入与可靠性
@@ -163,6 +164,17 @@ Baton 是服务端 Conversation 的 iOS Companion：服务端是唯一事实源�
 
 ## 暂缓候选
 
+### C-00：相册静态图片输入
+
+- **状态：** 已实现，验收收口中
+- **目标用户场景：** 用户在手机上选取至多四张静态图片，并可附带文字或本地语音转写，请服务端的业务 Agent 分析；Web 与 iPhone 随后看到同一条已提交消息。
+- **协议边界：** 仅 `baton/1.3` 且服务显式声明 `image_upload` 时启用。客户端以同源 Bearer multipart 先暂存一张已选图片，再通过正常 messages endpoint 的 `image_ref` 原子提交；服务完整解码校验 JPEG/PNG/WebP、大小与像素限制，并转成普通不可变 `image` 内容。上传不启动 run；只允许显式发送时上传，无后台补发。
+- **安全与生命周期：** 暂存媒体绑定会话和设备 session，建议 30 分钟过期；未提交孤儿按 TTL/撤销/close 清理。已提交媒体属于共享历史，撤销设备不得删除。临时选择仅可放私有、文件保护、不备份目录，绝不落 credential、proof 或 Cookie。
+- **兼容性：** 旧 1.1/1.2 App 可以拒绝 1.3 discovery；服务应为仍需支持的旧 App 提供旧 discovery profile，或要求升级。必答 `selection_required` 同样拒绝图片引用，不能通过附件绕过。
+- **已实现体验：** 相册选取 JPEG/PNG/WebP 后会显示草稿缩略图与消息图片预览；一条消息可为图文或纯图。用户取消会清理未提交草稿；同一存活进程内的显式重试复用上传和消息幂等键。客户端仅向服务声明的同源 endpoint 发送媒体，先暂存再以 `image_ref` 原子提交。
+- **明确不做：** 相机、文件、视频、任意 URL、后台上传、相册同步、图片编辑与跨 Conversation 复用。
+- **尚待最终确认：** 真机相册选择、后台切换与 `NSFileProtection` 生命周期；Simulator 无法暴露完整文件保护属性，因此该项在 Simulator 验证中明确跳过。
+
 ### C-01：服务端声明的交互选择
 
 - **状态：** 进行中（V1.2 首版）
@@ -198,6 +210,8 @@ Baton 是服务端 Conversation 的 iOS Companion：服务端是唯一事实源�
 ## 当前交接状态
 
 - 文档创建日期：2026-09-01
-- 当前阶段：F-01 至 F-04 均已有已验证首版；当前进入稳定性收口，下一项正式功能候选为 F-07 会话恢复反馈
+- 当前阶段：F-01 至 F-04 均已有已验证首版；相册静态图片输入的自动化收口已完成，真机验收待完成，下一项正式功能候选为 F-07 会话恢复反馈
 - 已排除项：远程推送 / APNs 直连方案
-- 最近验证：`BatonTests`、Debug build、Mock Server smoke test 通过；MR 会话的“进入 → 返回列表 → 再进入”图片回放已完成真机验证。
+- 自动验收已通过：完整 `BatonTests` 为 70 passed / 1 skipped（Simulator `NSFileProtection`）/ 0 failed；定向图片测试为 10 passed / 1 skipped / 0 failed；iOS Debug 与 Release build 均通过。干净独立的 V1.2 fixture 原 `smoke_test.py`、`media_unit_test.py` 与 `media_smoke_test.py` 均通过；此前复用脏 Store 的 smoke 失败已排除，不计入结果。
+- opt-in 联调证据：LM Studio `qwen3.8-27b` 的 `vision_lm_integration_test.py` 已验证红/蓝语义、同图数字 `3`/`8` 追问和 resolver 字节一致；临时环境注入的 Swift `LiveFixtureIntegrationTests` 真实完成配对、上传、发送与 snapshot，1 passed / 0 skipped，日志显示 `TEST EXECUTE SUCCEEDED`。这些检查分别记录，不与完整套件混算。
+- 真机相册、后台切换和 `NSFileProtection` 属性仍待验；Simulator 对完整文件保护属性测试明确跳过。尚未发布或提交。

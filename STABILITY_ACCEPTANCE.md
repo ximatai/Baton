@@ -9,6 +9,7 @@
 - 已配对会话的本地文本/图片副本、离线阅读与删除；
 - 语音转文字的长按、取消、编辑与离线禁用；
 - 手动配对、自动批准配对和审核演示二维码流程。
+- V1.3 相册静态图片选择、草稿缩略图/消息预览、同源暂存上传、`image_ref` 原子提交、取消与显式幂等重试。
 
 ## 自动验收
 
@@ -17,6 +18,9 @@
 ```sh
 git diff --check
 xcodebuild -project clients/ios/Baton.xcodeproj -scheme Baton -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing:BatonTests test
+xcodebuild -project clients/ios/Baton.xcodeproj -scheme Baton -configuration Debug -destination 'generic/platform=iOS Simulator' build
+xcodebuild -project clients/ios/Baton.xcodeproj -scheme Baton -configuration Release -destination 'generic/platform=iOS Simulator' build
+python3 mock_server/media_unit_test.py
 ```
 
 Mock Server 有改动时，以独立终端启动服务后执行：
@@ -24,6 +28,14 @@ Mock Server 有改动时，以独立终端启动服务后执行：
 ```sh
 python3 mock_server/mock_server.py --review-demo-token local-review-token-1234
 BATON_REVIEW_DEMO_TOKEN=local-review-token-1234 python3 mock_server/smoke_test.py
+```
+
+另开终端安装图片 fixture 的依赖并启动 V1.3 服务，再运行媒体回归：
+
+```sh
+python3 -m pip install -r mock_server/requirements-media.txt
+python3 mock_server/mock_server.py --port 8788 --vision
+python3 mock_server/media_smoke_test.py http://127.0.0.1:8788
 ```
 
 自动验收必须通过；不以 UI 测试替代下列真机检查。
@@ -43,6 +55,8 @@ BATON_REVIEW_DEMO_TOKEN=local-review-token-1234 python3 mock_server/smoke_test.p
 | 移除本机访问 | 在可用和服务端不可用两种状态下从列表移除会话 | 仅删除该会话的 Keychain 凭据与本地副本；其他会话不受影响 |
 | 多会话排序 | 至少三段会话，分别置顶、发送/接收消息、返回列表 | 置顶稳定在顶部；只有实际消息交互改变最近顺序；返回列表不触发重排或闪烁 |
 | 发送与取消 | 发送一条消息，在服务端流式回复中取消 | 不重复提交；取消后状态收敛；后续重连不复活已取消 run |
+| 相册图片输入 | 服务声明 `image_upload` 后选择单图、多图，分别发送图文和纯图；发送前移除或取消草稿，并模拟响应丢失后的显式重试 | 草稿显示缩略图；已提交消息和预览正确显示；上传仅发生在显式发送时并以同源 `image_ref` 提交；取消不留下待发图片；重试不产生重复媒体或消息 |
+| 图片后台与保护 | 选图、发送及移除会话后分别切到后台再返回；检查 App 私有临时目录和会话副本 | 未提交图片在发送完成、移除、凭据失效或会话撤销后清理；文件保护与不备份策略符合约定。Simulator 无法暴露完整 `NSFileProtection` 属性，本项必须标记为“跳过”，改由真机确认 |
 | 语音输入 | 键盘已弹出时长按输入框，分别松开与上滑取消 | 键盘不因长按主动收起；松开结果可编辑且不自动发送；取消恢复长按前文本 |
 | 断开/结束 | 服务端声明可结束与不声明可结束的各一段会话 | 列表不显示“结束”；详情仅在服务端声明时显示；断开提示定位正确且内容简洁 |
 
@@ -54,9 +68,14 @@ BATON_REVIEW_DEMO_TOKEN=local-review-token-1234 python3 mock_server/smoke_test.p
 4. 新增诊断日志、临时开关和测试素材已删除或明确仅限 Debug；
 5. `FEATURE_ROADMAP.md` 的状态与本次验收证据一致。
 
-## 当前证据（2026-09-03）
+## 当前证据与本次待验项（2026-09-08）
 
-- `BatonTests`：通过；
-- Mock Server smoke test：通过，覆盖审核演示二维码轮换与已扫码设备领取凭据；
+- 完整 `BatonTests`：70 passed / 1 skipped（Simulator `NSFileProtection`）/ 0 failed；定向图片测试：10 passed / 1 skipped / 0 failed。两者分别统计，不合并为一个总数。
+- iOS Debug 与 Release build：通过；
+- 干净独立 V1.2 fixture 的原 `smoke_test.py`：通过，覆盖审核演示二维码轮换与已扫码设备领取凭据；此前复用脏 Store 的失败已排除，不计入本次结果。
+- `media_unit_test.py` 与 `media_smoke_test.py`：通过；
 - MR 图片回放：真机已验证“进入 → 返回列表 → 再进入”持续可见；
 - 未覆盖项：审核演示的 iPhone 真机扫码与多会话全量回归，留待下一轮交付前执行。
+- `vision_lm_integration_test.py`：当前版本以 LM Studio `qwen3.8-27b` 通过真实配对、图片暂存/原子提交、web resolver 无设备凭据读取且字节相等，以及模型识别红/蓝和同图数字 `3`/`8` 追问。fixture 上游响应仍为非流式，仅将完成结果转换为 Baton 增量事件；最近 8 条、32,000 字符和 16 MiB 是资源预算，不是模型 token 预算。
+- 临时环境注入的 Swift `LiveFixtureIntegrationTests`：通过真实 `BatonAPIClient` 配对、上传、发送与 snapshot，1 passed / 0 skipped；日志显示 `TEST EXECUTE SUCCEEDED`。两项均为 opt-in 本地检查，不记录凭据或模型回复正文。
+- 真机相册、后台切换和 `NSFileProtection` 属性仍待验；Simulator 对完整文件保护属性测试明确跳过。尚未发布或提交。

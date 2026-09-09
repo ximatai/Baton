@@ -1,9 +1,13 @@
 # Local Xcode user state and generated Python bytecode.
-clients/ios/Baton.xcodeproj/xcuserdata/
+xcuserdata/
+*.xcuserstate
 __pycache__/
 *.py[cod]
 .venv/
 .DS_Store
+
+# Generated App Store Connect CLI reports.
+/.asc/reports/
 
 # Local credentials and environment overrides. Commit an explicitly reviewed
 # example file instead if a future integration needs one.

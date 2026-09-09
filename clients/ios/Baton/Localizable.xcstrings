@@ -14,6 +14,46 @@
         }
       }
     },
+    "取消图片发送" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancel image send"
+          }
+        }
+      }
+    },
+    "发送结果未确认。请重试确认发送结果。" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "The send result is unknown. Retry to confirm it." } }
+      }
+    },
+    "重试确认发送结果" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Retry to confirm send" } }
+      }
+    },
+    "正在上传图片 %d/%d…" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Uploading image %d/%d…" } }
+      }
+    },
+    "正在上传图片…" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Uploading image…" } }
+      }
+    },
+    "正在发送消息…" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Sending message…" } }
+      }
+    },
+    "移除全部" : {
+      "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Remove all" } }
+      }
+    },
     "Baton" : {
       "localizations" : {
         "en" : {
@@ -840,6 +880,22 @@
         }
       }
     },
+    "对话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conversation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "对话"
+          }
+        }
+      }
+    },
     "打开设置" : {
       "extractionState" : "stale",
       "localizations" : {
@@ -1303,6 +1359,54 @@
         }
       }
     },
+    "正在建立连接" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Establishing connection"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在建立连接"
+          }
+        }
+      }
+    },
+    "正在接入这台设备" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Joining this device"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在接入这台设备"
+          }
+        }
+      }
+    },
+    "正在验证二维码并连接服务，请稍候。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Checking the QR code and connecting to the service. Please wait."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "正在验证二维码并连接服务，请稍候。"
+          }
+        }
+      }
+    },
     "正在加载：%@" : {
       "localizations" : {
         "en" : {
@@ -1555,6 +1659,38 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "此服务已为当前二维码开启自动批准。会话凭据仍只会在服务端签发后保存。"
+          }
+        }
+      }
+    },
+    "服务" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Service"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务"
+          }
+        }
+      }
+    },
+    "服务正在允许这台设备加入，完成后会自动进入对话。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "The service is allowing this device to join. You’ll enter the conversation automatically when it’s ready."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "服务正在允许这台设备加入，完成后会自动进入对话。"
           }
         }
       }
@@ -2050,6 +2186,54 @@
         }
       }
     },
+    "在发起配对的网页允许这台设备加入，确认后会自动进入对话。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Allow this device to join on the web page where you started pairing. You’ll enter the conversation automatically after approval."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "在发起配对的网页允许这台设备加入，确认后会自动进入对话。"
+          }
+        }
+      }
+    },
+    "已加入对话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Joined conversation"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "已加入对话"
+          }
+        }
+      }
+    },
+    "请在显示二维码的设备上确认加入。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Confirm joining on the device displaying the QR code."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "请在显示二维码的设备上确认加入。"
+          }
+        }
+      }
+    },
     "请重新扫描网页中的二维码。" : {
       "localizations" : {
         "en" : {
@@ -2319,6 +2503,198 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "需要输入时扫码加入当前对话：手机适合语音，网页继续保留完整工作区。"
+          }
+        }
+      }
+    },
+    "Baton 已更新" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baton has been updated"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Baton 已更新"
+          }
+        }
+      }
+    },
+    "关闭更新说明" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Close release notes"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "关闭更新说明"
+          }
+        }
+      }
+    },
+    "感谢使用 Baton，这里是本次更新的重点。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Thank you for using Baton. Here are the highlights of this update."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "感谢使用 Baton，这里是本次更新的重点。"
+          }
+        }
+      }
+    },
+    "我知道了" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Got it"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "我知道了"
+          }
+        }
+      }
+    },
+    "更新 %lld: %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Update %lld: %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "更新 %lld: %@"
+          }
+        }
+      }
+    },
+    "图片对话" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Image conversations"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "图片对话"
+          }
+        }
+      }
+    },
+    "支持从相册选择图片，搭配文字发送，与 AI 继续交流。需要接入服务支持图片输入。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Choose photos from your library and send them with text to continue chatting with AI. Your connected service must support image input."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "支持从相册选择图片，搭配文字发送，与 AI 继续交流。需要接入服务支持图片输入。"
+          }
+        }
+      }
+    },
+    "版本 %@" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Version %@"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "版本 %@"
+          }
+        }
+      }
+    },
+    "版本更新" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "What’s New"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "版本更新"
+          }
+        }
+      }
+    },
+    "查看版本更新" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "View what’s new"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "查看版本更新"
+          }
+        }
+      }
+    },
+    "配对体验" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pairing experience"
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "配对体验"
+          }
+        }
+      }
+    },
+    "扫码后的等待提示更清晰，加入成功时显示确认反馈，再自动进入对话。" : {
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clearer guidance after scanning; a confirmation appears when joining succeeds before you enter the conversation automatically."
+          }
+        },
+        "zh-Hans" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "扫码后的等待提示更清晰，加入成功时显示确认反馈，再自动进入对话。"
           }
         }
       }

@@ -76,8 +76,9 @@ messages directly.
 2. The user scans it with Baton and requests to join **that exact** conversation.
 3. The Web page approves the device by default; the service may choose automatic
    approval for controlled environments.
-4. The phone enters the same conversation, transcribes speech locally, lets the
-   user edit it, and sends normal text messages.
+4. The phone enters the same conversation, can select static photos from its
+   library, optionally transcribes speech locally, lets the user edit it, and
+   explicitly sends one normal message.
 5. The Web client and phone stay synchronized as peer clients; the server always
    owns the conversation state.
 
@@ -94,14 +95,18 @@ without giving model keys to the app.
 - Saved multiple conversations, switching between them, and per-conversation
   availability checks
 - Text chat, Markdown, streaming replies, and server-controlled static-image display in one shared conversation
+- When a service declares `baton/1.3` `image_upload`, photo-library static-image selection with thumbnails/previews and explicit text-plus-image or image-only sending; images upload same-origin and commit atomically through `image_ref`, with cancellation and explicit idempotent retry for the same draft
 - Stop generation, reconnect after interruption, and end a shared conversation
 - iOS camera scanning; a Simulator Debug build can use the local demo service
 - On-device iOS Speech-to-Text: edit the transcript, then send it as normal text
 
-Image upload, camera/files, Tool UI, Agent-action approval, push notifications,
-location, and generative UI are intentionally out of scope for now. Baton only
-displays server-controlled static images and first focuses on making a shared
-conversation reliable across devices.
+Camera, files, video, arbitrary external-image URLs, Tool UI, Agent-action
+approval, push notifications, location, and generative UI are intentionally out
+of scope. Photo-library image input is implemented under the V1.3 contract:
+only a service that explicitly declares support can accept a photo the user
+explicitly selects and sends as a normal shared-conversation message. Automated
+closeout is complete; physical-device acceptance for photo selection,
+backgrounding, and file protection remains in progress.
 
 ## Add Baton to an existing system
 
