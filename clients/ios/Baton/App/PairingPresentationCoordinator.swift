@@ -25,6 +25,7 @@ final class PairingPresentationCoordinator: ObservableObject {
     private var completionGeneration = UUID()
     private var isPairingFlowActive = false
     private var isSceneActive = true
+    private var completionDelayFinished = false
 
     init(completionDelay: @escaping CompletionDelay = PairingPresentationCoordinator.oneSecondDelay) {
         self.completionDelay = completionDelay
@@ -48,35 +49,46 @@ final class PairingPresentationCoordinator: ObservableObject {
     func acceptCompletedPairing(
         sessionID: String,
         isSheetPresented: Bool,
-        sceneIsActive: Bool
+        sceneIsActive: Bool,
+        sceneIsBackground: Bool
     ) -> Bool {
         self.isSceneActive = sceneIsActive
         guard isPairingFlowActive,
               isSheetPresented,
-              sceneIsActive,
+              !sceneIsBackground,
               completedSessionID == nil,
               navigationSessionID == nil else { return false }
 
         let generation = UUID()
         completionGeneration = generation
         completedSessionID = sessionID
+        completionDelayFinished = false
         completionTask?.cancel()
         completionTask = Task { [weak self] in
             guard let self else { return }
             await completionDelay()
             guard !Task.isCancelled else { return }
+            completionDelayFinished = true
             finishCompletion(sessionID: sessionID, generation: generation)
         }
         return true
     }
 
-    /// A successful card must never navigate after the app leaves the foreground.
+    /// Temporary interruptions preserve the success card. Entering the background
+    /// clears it so an old completion can never navigate on a later foreground.
     @discardableResult
-    func sceneActivityChanged(isActive: Bool) -> Bool {
+    func sceneActivityChanged(isActive: Bool, isBackground: Bool) -> Bool {
         isSceneActive = isActive
-        guard !isActive, completedSessionID != nil else { return false }
-        discardPairingFlow()
-        return true
+        if isBackground, completedSessionID != nil {
+            discardPairingFlow()
+            return true
+        }
+        if isActive,
+           completionDelayFinished,
+           let sessionID = completedSessionID {
+            finishCompletion(sessionID: sessionID, generation: completionGeneration)
+        }
+        return false
     }
 
     func discardPairingFlow() {
@@ -86,6 +98,7 @@ final class PairingPresentationCoordinator: ObservableObject {
         completedSessionID = nil
         navigationSessionID = nil
         isPairingFlowActive = false
+        completionDelayFinished = false
     }
 
     /// Consumes the single navigation request after the pairing sheet has closed.
@@ -111,9 +124,9 @@ final class PairingPresentationCoordinator: ObservableObject {
     private func finishCompletion(sessionID: String, generation: UUID) {
         guard completionGeneration == generation,
               completedSessionID == sessionID,
-              navigationSessionID == nil,
-              isSceneActive else { return }
+              navigationSessionID == nil else { return }
         completionTask = nil
+        guard isSceneActive else { return }
         navigationSessionID = sessionID
     }
 

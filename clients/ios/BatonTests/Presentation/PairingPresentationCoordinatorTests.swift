@@ -8,8 +8,8 @@ struct PairingPresentationCoordinatorTests {
         let coordinator = PairingPresentationCoordinator { await delay.wait() }
 
         coordinator.beginPairingFlow()
-        #expect(coordinator.acceptCompletedPairing(sessionID: "session-1", isSheetPresented: true, sceneIsActive: true))
-        #expect(!coordinator.acceptCompletedPairing(sessionID: "session-1", isSheetPresented: true, sceneIsActive: true))
+        #expect(coordinator.acceptCompletedPairing(sessionID: "session-1", isSheetPresented: true, sceneIsActive: true, sceneIsBackground: false))
+        #expect(!coordinator.acceptCompletedPairing(sessionID: "session-1", isSheetPresented: true, sceneIsActive: true, sceneIsBackground: false))
         #expect(coordinator.navigationSessionID == nil)
 
         let task = coordinator.completionTask
@@ -26,7 +26,7 @@ struct PairingPresentationCoordinatorTests {
         let coordinator = PairingPresentationCoordinator { await delay.wait() }
 
         coordinator.beginPairingFlow()
-        #expect(coordinator.acceptCompletedPairing(sessionID: "old-session", isSheetPresented: true, sceneIsActive: true))
+        #expect(coordinator.acceptCompletedPairing(sessionID: "old-session", isSheetPresented: true, sceneIsActive: true, sceneIsBackground: false))
         let task = coordinator.completionTask
         coordinator.discardPairingFlow()
         coordinator.beginPairingFlow()
@@ -43,15 +43,50 @@ struct PairingPresentationCoordinatorTests {
         let coordinator = PairingPresentationCoordinator { await delay.wait() }
 
         coordinator.beginPairingFlow()
-        #expect(coordinator.acceptCompletedPairing(sessionID: "session-1", isSheetPresented: true, sceneIsActive: true))
+        #expect(coordinator.acceptCompletedPairing(sessionID: "session-1", isSheetPresented: true, sceneIsActive: true, sceneIsBackground: false))
         let task = coordinator.completionTask
-        #expect(coordinator.sceneActivityChanged(isActive: false))
+        #expect(coordinator.sceneActivityChanged(isActive: false, isBackground: true))
 
         await delay.release()
         await task?.value
 
         #expect(coordinator.completedSessionID == nil)
         #expect(coordinator.navigationSessionID == nil)
+    }
+
+    @Test func inactiveSuccessWaitsForActiveBeforeNavigating() async {
+        let delay = ControlledDelay()
+        let coordinator = PairingPresentationCoordinator { await delay.wait() }
+
+        coordinator.beginPairingFlow()
+        #expect(coordinator.acceptCompletedPairing(sessionID: "session-1", isSheetPresented: true, sceneIsActive: false, sceneIsBackground: false))
+        let task = coordinator.completionTask
+
+        await delay.release()
+        await task?.value
+
+        #expect(coordinator.completedSessionID == "session-1")
+        #expect(coordinator.navigationSessionID == nil)
+        #expect(!coordinator.sceneActivityChanged(isActive: true, isBackground: false))
+        #expect(coordinator.navigationSessionID == "session-1")
+    }
+
+    @Test func temporaryInactiveStatePreservesSuccessUntilActive() async {
+        let delay = ControlledDelay()
+        let coordinator = PairingPresentationCoordinator { await delay.wait() }
+
+        coordinator.beginPairingFlow()
+        #expect(coordinator.acceptCompletedPairing(sessionID: "session-1", isSheetPresented: true, sceneIsActive: true, sceneIsBackground: false))
+        let task = coordinator.completionTask
+        #expect(!coordinator.sceneActivityChanged(isActive: false, isBackground: false))
+
+        await delay.release()
+        await task?.value
+
+        #expect(coordinator.completedSessionID == "session-1")
+        #expect(coordinator.navigationSessionID == nil)
+        #expect(!coordinator.sceneActivityChanged(isActive: true, isBackground: false))
+        #expect(coordinator.navigationSessionID == "session-1")
     }
 
     @Test func releaseNotesWaitForPairingNavigationAndResumeAfterFailedPairingCancels() async {
@@ -73,7 +108,7 @@ struct PairingPresentationCoordinatorTests {
         #expect(coordinator.canPresentReleaseNotes(in: safeHome))
 
         coordinator.beginPairingFlow()
-        #expect(coordinator.acceptCompletedPairing(sessionID: "session-1", isSheetPresented: true, sceneIsActive: true))
+        #expect(coordinator.acceptCompletedPairing(sessionID: "session-1", isSheetPresented: true, sceneIsActive: true, sceneIsBackground: false))
         let task = coordinator.completionTask
         await delay.release()
         await task?.value

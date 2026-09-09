@@ -96,9 +96,10 @@ struct ContentView: View {
                 let accepted = pairingPresentation.acceptCompletedPairing(
                     sessionID: sessionID,
                     isSheetPresented: isShowingScanner,
-                    sceneIsActive: scenePhase == .active
+                    sceneIsActive: scenePhase == .active,
+                    sceneIsBackground: scenePhase == .background
                 )
-                if !accepted, scenePhase != .active {
+                if !accepted, scenePhase == .background {
                     isShowingScanner = false
                 }
             }
@@ -122,7 +123,10 @@ struct ContentView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in
-            if pairingPresentation.sceneActivityChanged(isActive: phase == .active) {
+            if pairingPresentation.sceneActivityChanged(
+                isActive: phase == .active,
+                isBackground: phase == .background
+            ) {
                 isShowingScanner = false
             }
             if phase == .background {
